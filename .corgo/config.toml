@@ -1,0 +1,20 @@
+[build]
+# voxel-core once per renderer binary.
+target-dir = "target"
+
+[target.x86_64-unknown-linux-gnu]
+# Use mold linker if available for faster incremental link times.
+# Remove this block if mold is not installed.
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.x86_64-pc-windows-msvc]
+
+# Alias shortcuts 
+[alias]
+# Run the naive renderer
+naive     = "run --package renderer-naive --release"
+# Run the optimised renderer
+opt       = "run --package renderer-optimised --release"
+# Run benchmarks for both (call from a shell script — cargo can't run two at once)
+bench-all = "build --release --package renderer-naive --package renderer-optimised"

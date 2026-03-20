@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    "voxel-core",
+    "renderer-naive",
+    "renderer-optimised",
+]
+resolver = "2"
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["Jadyn Hand"]
+license     = "MIT"
+rust-version = "1.79"
+
+[workspace.dependencies]
+wgpu    = { version = "22", features = ["wgsl"] }
+winit   = { version = "0.30", features = ["rwh_06"] }
+glam    = { version = "0.29", features = ["bytemuck"] }
+bytemuck = { version = "1.16", features = ["derive"] }
+redb    = "2"
+rkyv    = { version = "0.8", features = ["validation"] }
+noise   = "0.9"
+log     = "0.4"
+env_logger = "0.11"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+csv         = "1"
+pollster = "0.3"
+
+# Profile overrides
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"

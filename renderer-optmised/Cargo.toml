@@ -1,0 +1,26 @@
+[package]
+name        = "renderer-optimised"
+description = "Optimised voxel renderer — binary greedy meshing, compute culling, vertex pulling."
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+rust-version.workspace = true
+
+[[bin]]
+name = "renderer-optimised"
+path = "src/main.rs"
+
+[dependencies]
+voxel-core = { path = "../voxel-core" }
+wgpu.workspace       = true
+winit.workspace      = true
+glam.workspace       = true
+bytemuck.workspace   = true
+log.workspace        = true
+env_logger.workspace = true
+pollster.workspace   = true
+
+[features]
+default = []
+gpu-timing = ["wgpu/timestamp-query"]
