@@ -23,4 +23,4 @@ pollster.workspace   = true
 
 [features]
 default = []
-gpu-timing = ["wgpu/timestamp-query"]
+gpu-timing = []
