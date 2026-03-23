@@ -1,6 +1,6 @@
 [package]
 name        = "voxel-core"
-description = "Shared world state, persistence, camera, input, and benchmarking — used by both renderers."
+description = "Shared world state, persistence, camera, input, and benchmarking."
 version.workspace     = true
 edition.workspace     = true
 authors.workspace     = true
@@ -8,18 +8,18 @@ license.workspace     = true
 rust-version.workspace = true
 
 [dependencies]
-wgpu.workspace     = true
-winit.workspace    = true
-glam.workspace     = true
-bytemuck.workspace = true
-redb.workspace     = true
-rkyv.workspace     = true
-noise.workspace    = true
-log.workspace      = true
+glam.workspace       = true
+bytemuck.workspace   = true
+redb.workspace       = true
+rkyv.workspace       = true
+noise.workspace      = true
+log.workspace        = true
 serde.workspace      = true
 serde_json.workspace = true
 csv.workspace        = true
+wgpu.workspace       = true
+winit.workspace      = true
+pollster.workspace   = true
 
-[features]
-default = []
-procgen = []
+[dev-dependencies]
+tempfile = "3"
