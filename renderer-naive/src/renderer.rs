@@ -141,21 +141,43 @@ impl NaiveRenderer {
         })
     }
 
-    /// Generates a small test world (5×2×5 chunks) using proc-gen terrain
-    /// and uploads each chunk's mesh to the GPU.
+    /// Generates a 5×4×5 chunk world, inserts all chunks into a World so
+    /// inter-chunk face culling works, then meshes each chunk.
     fn generate_world(
         device: &wgpu::Device,
         pipeline: &NaivePipeline,
     ) -> Vec<ChunkDraw> {
-        let params = TerrainParams::default();
-        let mut draws = Vec::new();
+        use voxel_core::world::World;
 
-        for cx in -2i32..=2 {
-            for cy in -1i32..=0 {
-                for cz in -2i32..=2 {
+        let params = TerrainParams::default();
+
+        // Range: x/z = -2..=2, y = -2..=1
+        // sea_level=32, so surface is in chunk y=1 (world y=32..64).
+        // y=-2 = deep stone, y=-1 = lower stone, y=0 = upper stone/dirt, y=1 = surface+grass
+        let x_range = -2i32..=2;
+        let y_range = -2i32..=1;
+        let z_range = -2i32..=2;
+
+        // Phase 1: generate and insert all chunks into the world
+        let mut world = World::new();
+        for cy in y_range.clone() {
+            for cz in z_range.clone() {
+                for cx in x_range.clone() {
+                    let pos = IVec3::new(cx, cy, cz);
+                    let chunk = generate_chunk(pos, &params);
+                    world.insert_chunk(pos, chunk);
+                }
+            }
+        }
+
+        // Phase 2: mesh each chunk with cross-chunk neighbour awareness
+        let mut draws = Vec::new();
+        for cy in y_range {
+            for cz in z_range.clone() {
+                for cx in x_range.clone() {
                     let chunk_pos = IVec3::new(cx, cy, cz);
-                    let chunk = generate_chunk(chunk_pos, &params);
-                    let (verts, idx) = build_chunk_mesh(&chunk, chunk_pos);
+                    let chunk = world.get_chunk(&chunk_pos).unwrap();
+                    let (verts, idx) = build_chunk_mesh(chunk, chunk_pos, &world);
 
                     if verts.is_empty() {
                         continue;
@@ -177,7 +199,6 @@ impl NaiveRenderer {
                         },
                     );
 
-                    // Per-chunk uniform: world-space origin
                     use voxel_core::world::CHUNK_SIZE_I;
                     let origin = [
                         (cx * CHUNK_SIZE_I) as f32,
