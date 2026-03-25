@@ -40,7 +40,7 @@ impl CameraController {
 
     /// Applies a mouse delta (pixels) to yaw and pitch.
     pub fn apply_mouse_delta(&mut self, dx: f32, dy: f32) {
-        self.yaw -= dx * self.config.look_sensitivity;
+        self.yaw += dx * self.config.look_sensitivity;
         self.pitch -= dy * self.config.look_sensitivity;
 
         // Wrap yaw to [-π, π] to prevent float drift over long sessions.
