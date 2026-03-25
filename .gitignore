@@ -12,3 +12,7 @@ saves/
 Thumbs.db
 
 .env
+
+.venv/
+
+figures/
