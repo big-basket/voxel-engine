@@ -1,4 +1,4 @@
-use noise::{NoiseFn, Perlin, Seedable};
+use noise::{NoiseFn, Perlin};
 use glam::IVec3;
 
 use crate::world::{Chunk, VoxelId, CHUNK_SIZE, CHUNK_SIZE_I};

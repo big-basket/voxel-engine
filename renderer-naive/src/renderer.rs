@@ -1,22 +1,33 @@
 use std::sync::Arc;
 
+use glam::IVec3;
 use wgpu::{
     CommandEncoderDescriptor, LoadOp, Operations, RenderPassColorAttachment,
     RenderPassDescriptor, StoreOp, SurfaceConfiguration, TextureUsages, TextureViewDescriptor,
+    util::DeviceExt,
 };
 use winit::window::Window;
 
 use voxel_core::{
     camera::{Camera, CameraUniform},
-    gpu::{GpuContext, create_uniform_buffer, write_uniform},
+    gen::{TerrainParams, generate_chunk},
+    gpu::{GpuContext, GpuError, create_uniform_buffer, write_uniform},
 };
 
+use crate::mesh::build_chunk_mesh;
+use crate::pipeline::{ChunkUniform, NaivePipeline};
+
+/// All GPU resources for one renderable chunk.
+struct ChunkDraw {
+    vertex_buf: wgpu::Buffer,
+    index_buf:  wgpu::Buffer,
+    index_count: u32,
+    chunk_buf:  wgpu::Buffer,
+    chunk_bind_group: wgpu::BindGroup,
+}
+
 pub struct NaiveRenderer {
-    // Window is stored here so it is always dropped AFTER the surface.
-    // On Wayland, Surface holds a raw pointer into the window handle — if
-    // Window drops first you get a use-after-free segfault on exit.
-    // Rust drops struct fields in declaration order (top to bottom),
-    // so surface (declared after window) is dropped before window.
+    // Window first — must outlive surface (drop order = declaration order, reversed)
     pub window: Arc<Window>,
 
     pub gpu: GpuContext,
@@ -29,28 +40,29 @@ pub struct NaiveRenderer {
 
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
+
+    pipeline: NaivePipeline,
+    chunk_draws: Vec<ChunkDraw>,
 }
 
 impl NaiveRenderer {
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-    pub fn new(gpu: GpuContext, window: Arc<Window>, width: u32, height: u32) -> Self {
-        let surface = gpu.instance
+    pub fn new(window: Arc<Window>, width: u32, height: u32) -> Result<Self, GpuError> {
+        let instance = GpuContext::create_instance();
+
+        let surface = instance
             .create_surface(Arc::clone(&window))
             .expect("create surface");
 
-        let caps = surface.get_capabilities(&gpu.adapter);
+        let gpu = GpuContext::from_surface(instance, &surface, wgpu::Features::empty())?;
+        log::info!("GPU: {}", gpu.adapter_info());
 
-        let surface_format = caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
+        let caps = surface.get_capabilities(&gpu.adapter);
+        let surface_format = caps.formats.iter()
+            .find(|f| f.is_srgb()).copied()
             .unwrap_or(caps.formats[0]);
 
-        // Fifo = hard vsync, matches compositor refresh exactly.
-        // AutoVsync can pick Mailbox which queues extra frames and causes the
-        // "resize inertia" effect on Wayland.
         let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
             wgpu::PresentMode::Fifo
         } else {
@@ -69,6 +81,7 @@ impl NaiveRenderer {
         };
         surface.configure(&gpu.device, &config);
 
+        // ── Camera uniform ────────────────────────────────────────────────
         let camera_buf = create_uniform_buffer::<CameraUniform>(&gpu.device, "camera uniform");
 
         let camera_bind_group_layout =
@@ -95,10 +108,25 @@ impl NaiveRenderer {
             }],
         });
 
+        // ── Depth buffer ──────────────────────────────────────────────────
         let (depth_texture, depth_view) =
             Self::create_depth_texture(&gpu.device, width.max(1), height.max(1));
 
-        NaiveRenderer {
+        // ── Pipeline ──────────────────────────────────────────────────────
+        let pipeline = NaivePipeline::new(
+            &gpu.device,
+            surface_format,
+            &camera_bind_group_layout,
+            Self::DEPTH_FORMAT,
+        );
+
+        // ── Generate test world ───────────────────────────────────────────
+        let chunk_draws = Self::generate_world(
+            &gpu.device,
+            &pipeline,
+        );
+
+        Ok(NaiveRenderer {
             window,
             gpu,
             surface,
@@ -108,15 +136,94 @@ impl NaiveRenderer {
             camera_bind_group,
             depth_texture,
             depth_view,
+            pipeline,
+            chunk_draws,
+        })
+    }
+
+    /// Generates a small test world (5×2×5 chunks) using proc-gen terrain
+    /// and uploads each chunk's mesh to the GPU.
+    fn generate_world(
+        device: &wgpu::Device,
+        pipeline: &NaivePipeline,
+    ) -> Vec<ChunkDraw> {
+        let params = TerrainParams::default();
+        let mut draws = Vec::new();
+
+        for cx in -2i32..=2 {
+            for cy in -1i32..=0 {
+                for cz in -2i32..=2 {
+                    let chunk_pos = IVec3::new(cx, cy, cz);
+                    let chunk = generate_chunk(chunk_pos, &params);
+                    let (verts, idx) = build_chunk_mesh(&chunk, chunk_pos);
+
+                    if verts.is_empty() {
+                        continue;
+                    }
+
+                    let vertex_buf = device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("chunk vbuf"),
+                            contents: bytemuck::cast_slice(&verts),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        },
+                    );
+
+                    let index_buf = device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("chunk ibuf"),
+                            contents: bytemuck::cast_slice(&idx),
+                            usage: wgpu::BufferUsages::INDEX,
+                        },
+                    );
+
+                    // Per-chunk uniform: world-space origin
+                    use voxel_core::world::CHUNK_SIZE_I;
+                    let origin = [
+                        (cx * CHUNK_SIZE_I) as f32,
+                        (cy * CHUNK_SIZE_I) as f32,
+                        (cz * CHUNK_SIZE_I) as f32,
+                        0.0f32,
+                    ];
+                    let chunk_uniform = ChunkUniform { origin };
+
+                    let chunk_buf = device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("chunk uniform"),
+                            contents: bytemuck::bytes_of(&chunk_uniform),
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        },
+                    );
+
+                    let chunk_bind_group =
+                        device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("chunk bg"),
+                            layout: &pipeline.chunk_bind_group_layout,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: chunk_buf.as_entire_binding(),
+                            }],
+                        });
+
+                    draws.push(ChunkDraw {
+                        vertex_buf,
+                        index_buf,
+                        index_count: idx.len() as u32,
+                        chunk_buf,
+                        chunk_bind_group,
+                    });
+                }
+            }
         }
+
+        log::info!("Generated {} chunk draw calls", draws.len());
+        draws
     }
 
     // ── Resize ────────────────────────────────────────────────────────────────
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 {
-            return;
-        }
+        if width == 0 || height == 0 { return; }
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.gpu.device, &self.config);
@@ -128,8 +235,12 @@ impl NaiveRenderer {
     // ── Render ────────────────────────────────────────────────────────────────
 
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
-        let uniform = CameraUniform::from_camera(camera);
-        write_uniform(&self.gpu.queue, &self.camera_buf, &uniform);
+        // Upload camera uniform
+        write_uniform(
+            &self.gpu.queue,
+            &self.camera_buf,
+            &CameraUniform::from_camera(camera),
+        );
 
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
@@ -139,14 +250,14 @@ impl NaiveRenderer {
         );
 
         {
-            let _pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("clear pass"),
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("naive pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(wgpu::Color {
-                            r: 0.53, g: 0.81, b: 0.98, a: 1.0,
+                            r: 0.53, g: 0.81, b: 0.98, a: 1.0, // sky blue
                         }),
                         store: StoreOp::Store,
                     },
@@ -162,6 +273,16 @@ impl NaiveRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
+            pass.set_pipeline(&self.pipeline.pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+
+            for draw in &self.chunk_draws {
+                pass.set_bind_group(1, &draw.chunk_bind_group, &[]);
+                pass.set_vertex_buffer(0, draw.vertex_buf.slice(..));
+                pass.set_index_buffer(draw.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..draw.index_count, 0, 0..1);
+            }
         }
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));

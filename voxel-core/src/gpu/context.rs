@@ -1,9 +1,5 @@
 use wgpu::{Adapter, Device, DeviceDescriptor, Features, Instance, Limits, Queue};
 
-/// The shared wgpu context — everything both renderers need before they can
-/// build pipelines or upload data. Surface creation is handled separately in
-/// each renderer because the naive and optimised renderers may configure
-/// their swap chains differently.
 pub struct GpuContext {
     pub instance: Instance,
     pub adapter: Adapter,
@@ -12,26 +8,82 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// Initialises the wgpu instance, selects an adapter, and creates a
-    /// device + queue. This is the blocking (pollster) version used by both
-    /// renderers at startup.
-    ///
-    /// `required_features` lets each renderer request what it needs:
-    /// - naive: `Features::empty()`
-    /// - optimised: `Features::INDIRECT_FIRST_INSTANCE | Features::MULTI_DRAW_INDIRECT`
-    ///   (and optionally `Features::TIMESTAMP_QUERY` when the `gpu-timing` feature is on)
-    pub fn new(required_features: Features) -> Result<Self, GpuError> {
-        pollster::block_on(Self::new_async(required_features))
+    /// Creates just the wgpu Instance. Call this before creating the window
+    /// surface so the instance exists when `from_surface` is called.
+    pub fn create_instance() -> Instance {
+        // Prefer Vulkan on Linux — the GLES/EGL backend crashes on Wayland
+        // when the surface is created after the instance without a surface hint.
+        // On non-Linux platforms, fall back to all backends.
+        #[cfg(target_os = "linux")]
+        let backends = wgpu::Backends::VULKAN;
+        #[cfg(not(target_os = "linux"))]
+        let backends = wgpu::Backends::all();
+
+        Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        })
     }
 
-    async fn new_async(required_features: Features) -> Result<Self, GpuError> {
-        // wgpu 22: Instance::new takes a value, not a reference.
+    /// Selects an adapter compatible with `surface`, then creates device + queue.
+    /// This is the correct path for Wayland — the adapter is chosen with the
+    /// surface in hand so wgpu never needs to switch backends mid-flight.
+    pub fn from_surface(
+        instance: Instance,
+        surface: &wgpu::Surface<'_>,
+        required_features: Features,
+    ) -> Result<Self, GpuError> {
+        pollster::block_on(Self::from_surface_async(instance, surface, required_features))
+    }
+
+    async fn from_surface_async(
+        instance: Instance,
+        surface: &wgpu::Surface<'_>,
+        required_features: Features,
+    ) -> Result<Self, GpuError> {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok_or(GpuError::NoAdapter)?;
+
+        let supported = adapter.features();
+        let missing = required_features.difference(supported);
+        if !missing.is_empty() {
+            return Err(GpuError::MissingFeatures(missing));
+        }
+
+        let (device, queue) = adapter
+            .request_device(
+                &DeviceDescriptor {
+                    label: Some("voxel-engine device"),
+                    required_features,
+                    required_limits: Limits::default(),
+                    memory_hints: Default::default(),
+                },
+                None,
+            )
+            .await
+            .map_err(GpuError::DeviceRequest)?;
+
+        Ok(GpuContext { instance, adapter, device, queue })
+    }
+
+    /// Headless path — used by unit tests and non-Wayland contexts where
+    /// there is no surface to hint the adapter selection.
+    pub fn new_headless(required_features: Features) -> Result<Self, GpuError> {
+        pollster::block_on(Self::new_headless_async(required_features))
+    }
+
+    async fn new_headless_async(required_features: Features) -> Result<Self, GpuError> {
         let instance = Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
-        // request_adapter is still async in wgpu 22.
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -41,7 +93,6 @@ impl GpuContext {
             .await
             .ok_or(GpuError::NoAdapter)?;
 
-        // Features does not implement Sub — use .difference() instead.
         let supported = adapter.features();
         let missing = required_features.difference(supported);
         if !missing.is_empty() {
@@ -75,11 +126,8 @@ impl GpuContext {
 
 #[derive(Debug)]
 pub enum GpuError {
-    /// No suitable adapter found (no GPU, or headless environment without Vulkan/DX12).
     NoAdapter,
-    /// The adapter exists but doesn't support required features.
     MissingFeatures(Features),
-    /// Device creation failed.
     DeviceRequest(wgpu::RequestDeviceError),
 }
 
@@ -99,15 +147,12 @@ impl std::error::Error for GpuError {}
 mod tests {
     use super::*;
 
-    /// This test requires a real GPU. It is skipped gracefully when running
-    /// headless (CI, sandbox) by treating NoAdapter as a skip rather than a
-    /// failure. It validates that the init path compiles and runs end-to-end.
     #[test]
-    fn gpu_context_init_or_skip() {
-        match GpuContext::new(Features::empty()) {
+    fn gpu_context_headless_or_skip() {
+        match GpuContext::new_headless(Features::empty()) {
             Ok(ctx) => {
                 let info = ctx.adapter_info();
-                assert!(!info.is_empty(), "adapter info should not be empty");
+                assert!(!info.is_empty());
                 println!("GPU adapter: {info}");
             }
             Err(GpuError::NoAdapter) => {
