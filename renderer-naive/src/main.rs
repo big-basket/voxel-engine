@@ -16,11 +16,18 @@ use voxel_core::{
 mod renderer;
 mod mesh;
 mod pipeline;
+mod bench;
 
 use renderer::NaiveRenderer;
 
 fn main() {
     env_logger::init();
+
+    // If --bench is passed, run headless benchmarks and exit.
+    if std::env::args().any(|a| a == "--bench") {
+        bench::run_benchmarks();
+        return;
+    }
 
     let event_loop = EventLoop::new().expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -67,10 +74,10 @@ impl ApplicationHandler for App {
             }
         };
 
-        // Start above the terrain — default sea_level is 32, amplitude 24
-        // so surface is around y=32..56. Start at y=80 looking forward.
+        // sea_level=32 with amplitude=24, so surface is roughly y=32..56.
+        // Chunk y=1 covers world y=32..63 — start above it looking down-forward.
         let mut camera = Camera::new(size.width as f32 / size.height as f32);
-        camera.position = glam::Vec3::new(0.0, 80.0, 0.0);
+        camera.position = glam::Vec3::new(0.0, 100.0, -80.0);
 
         let controller = CameraController::new(ControllerConfig::default());
 

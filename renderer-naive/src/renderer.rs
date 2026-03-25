@@ -18,6 +18,7 @@ use crate::mesh::build_chunk_mesh;
 use crate::pipeline::{ChunkUniform, NaivePipeline};
 
 /// All GPU resources for one renderable chunk.
+#[allow(dead_code)]
 struct ChunkDraw {
     vertex_buf: wgpu::Buffer,
     index_buf:  wgpu::Buffer,
@@ -35,6 +36,7 @@ pub struct NaiveRenderer {
     config: SurfaceConfiguration,
 
     pub camera_buf: wgpu::Buffer,
+    #[allow(dead_code)]
     pub camera_bind_group_layout: wgpu::BindGroupLayout,
     pub camera_bind_group: wgpu::BindGroup,
 
@@ -311,6 +313,7 @@ impl NaiveRenderer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn surface_format(&self) -> wgpu::TextureFormat {
         self.config.format
     }
