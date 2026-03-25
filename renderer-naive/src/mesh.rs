@@ -169,9 +169,9 @@ mod tests {
     #[test]
     fn vertex_packing_roundtrip() {
         let v = Vertex::new(31, 15, 7, 3, 255);
-        let x = (v.packed_pos & 0x1F) as u8;
-        let y = ((v.packed_pos >> 5) & 0x1F) as u8;
-        let z = ((v.packed_pos >> 10) & 0x1F) as u8;
+        let x = (v.packed_pos & 0x3F) as u8;
+        let y = ((v.packed_pos >> 6) & 0x3F) as u8;
+        let z = ((v.packed_pos >> 12) & 0x3F) as u8;
         let face = (v.packed_data & 0x7) as u8;
         let id = ((v.packed_data >> 3) & 0xFF) as u8;
         assert_eq!((x, y, z, face, id), (31, 15, 7, 3, 255));
