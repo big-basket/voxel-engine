@@ -1,18 +1,15 @@
 /// Headless benchmark runner.
 ///
 /// Called from main() when `--bench` is passed on the command line.
-/// Runs all three canonical scenes, measures frame metrics over the
-/// configured number of frames, and writes results to `results/`.
-///
-/// No window is shown — the renderer renders to a texture instead of
-/// a surface, so this works without a display.
+/// Loads scene configuration from `benchmark_config.json` in the workspace
+/// root, falling back to hardcoded defaults if the file is absent.
 
 use wgpu::util::DeviceExt;
 
 use voxel_core::{
-    benchmark::{all_scenes, MetricsCollector, Recorder, SceneKind},
+    benchmark::{BenchmarkConfig, MetricsCollector, Recorder, SceneKind},
     camera::{Camera, CameraUniform},
-    gen::{TerrainParams, generate_chunk},
+    gen::generate_chunk,
     gpu::{GpuContext, GpuError, write_uniform},
 };
 
@@ -23,17 +20,25 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const RENDER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const WIDTH:  u32 = 1280;
 const HEIGHT: u32 = 720;
+const CONFIG_PATH: &str = "benchmark_config.json";
 
 pub fn run_benchmarks() {
-    // Suppress verbose wgpu_core/wgpu_hal device messages that flood the output.
-    // Only show our own info logs and warnings from wgpu itself.
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info,wgpu_core=warn,wgpu_hal=warn,naga=warn");
     }
 
     log::info!("=== Naive renderer benchmark ===");
 
-    // Headless GPU init — no surface, no window.
+    let config_path = std::path::Path::new(CONFIG_PATH);
+    if !config_path.exists() {
+        log::info!("Writing default benchmark_config.json — edit to customise scenes.");
+        if let Err(e) = BenchmarkConfig::write_default(config_path) {
+            log::warn!("Could not write default config: {e}");
+        }
+    }
+    let config = BenchmarkConfig::load_or_default(config_path);
+    log::info!("Running {} scene(s)", config.scenes.len());
+
     let gpu = match GpuContext::new_headless(wgpu::Features::empty()) {
         Ok(g) => g,
         Err(GpuError::NoAdapter) => {
@@ -47,7 +52,6 @@ pub fn run_benchmarks() {
     };
     log::info!("GPU: {}", gpu.adapter_info());
 
-    // Shared resources that don't change between scenes.
     let camera_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("bench camera uniform"),
         size: CameraUniform::SIZE,
@@ -80,23 +84,21 @@ pub fn run_benchmarks() {
 
     let pipeline = NaivePipeline::new(&gpu.device, RENDER_FORMAT, &camera_bgl, DEPTH_FORMAT);
 
-    // Off-screen render target
     let (_render_tex, render_view) = make_render_target(&gpu.device);
     let (_depth_tex, depth_view) = make_depth_target(&gpu.device);
 
     let recorder = Recorder::new("naive", "results");
-    let scenes = all_scenes();
 
-    for scene in &scenes {
+    for scene in &config.scenes {
         log::info!("--- Scene: {} ---", scene.id);
         log::info!("  {}", scene.description);
 
         let mut camera = Camera::new(WIDTH as f32 / HEIGHT as f32);
-        camera.position = scene.camera_pos;
-        camera.forward = scene.camera_forward;
+        camera.position = scene.camera_pos();
+        camera.forward  = scene.camera_forward();
 
         match &scene.kind {
-            voxel_core::benchmark::SceneKind::StaticHighDensity { draw_radius, vertical_layers } => {
+            SceneKind::StaticHighDensity { draw_radius, vertical_layers } => {
                 let chunk_draws = build_scene_draws(
                     &gpu.device, &pipeline, &scene.terrain,
                     *draw_radius, *vertical_layers,
@@ -106,15 +108,11 @@ pub fn run_benchmarks() {
                     &render_view, &depth_view,
                     &chunk_draws, &camera,
                     scene.warmup_frames, scene.measure_frames,
-                    &recorder, scene.id, scene.description,
+                    &recorder, &scene.id, &scene.description,
                 );
             }
 
-            voxel_core::benchmark::SceneKind::DynamicRemesh { .. } => {
-                // Dynamic remesh: same geometry as a mid-sized static scene,
-                // but frame time includes the CPU cost of rebuilding dirty meshes.
-                // For the naive renderer this is identical to static — the optimised
-                // renderer will show the real difference here.
+            SceneKind::DynamicRemesh { .. } => {
                 let chunk_draws = build_scene_draws(
                     &gpu.device, &pipeline, &scene.terrain, 6, 3,
                 );
@@ -123,18 +121,18 @@ pub fn run_benchmarks() {
                     &render_view, &depth_view,
                     &chunk_draws, &camera,
                     scene.warmup_frames, scene.measure_frames,
-                    &recorder, scene.id, scene.description,
+                    &recorder, &scene.id, &scene.description,
                 );
             }
 
-            voxel_core::benchmark::SceneKind::StressTest { voxels_per_step, fps_floor } => {
+            SceneKind::StressTest { voxels_per_step, fps_floor } => {
                 run_stress_test(
                     &gpu, &pipeline, &camera_buf, &camera_bg,
                     &render_view, &depth_view,
                     &camera, &scene.terrain,
                     scene.warmup_frames, scene.measure_frames,
                     *voxels_per_step, *fps_floor,
-                    &recorder, scene.id, scene.description,
+                    &recorder, &scene.id, &scene.description,
                 );
             }
         }
@@ -248,7 +246,7 @@ fn run_stress_test(
     render_view: &wgpu::TextureView,
     depth_view: &wgpu::TextureView,
     camera: &Camera,
-    terrain: &TerrainParams,
+    terrain: &voxel_core::gen::TerrainParams,
     warmup_frames: u32,
     max_frames: u32,
     _voxels_per_step: u32,
@@ -335,7 +333,7 @@ struct DrawCall {
 fn build_scene_draws(
     device: &wgpu::Device,
     pipeline: &NaivePipeline,
-    terrain: &TerrainParams,
+    terrain: &voxel_core::gen::TerrainParams,
     draw_radius: i32,
     vertical_layers: i32,
 ) -> Vec<DrawCall> {

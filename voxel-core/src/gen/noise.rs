@@ -3,9 +3,11 @@ use glam::IVec3;
 
 use crate::world::{Chunk, VoxelId, CHUNK_SIZE, CHUNK_SIZE_I};
 
+use serde::{Deserialize, Serialize};
+
 /// Parameters controlling terrain shape. Keep this a plain struct so it can
 /// be serialised easily for reproducible benchmark scenes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerrainParams {
     pub seed: u32,
     /// World-space Y at which terrain height == 0 on flat ground.

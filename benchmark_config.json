@@ -1,0 +1,100 @@
+{
+  "scenes": [
+    {
+      "id": "static_high_density",
+      "description": "Static view \u2014 high-density scene, long draw distance, peak throughput",
+      "terrain": {
+        "seed": 12345,
+        "sea_level": 32,
+        "amplitude": 28.0,
+        "frequency": 0.012,
+        "octaves": 5,
+        "persistence": 0.5,
+        "lacunarity": 2.0
+      },
+      "camera": {
+        "position": [
+          0.0,
+          120.0,
+          -200.0
+        ],
+        "forward": [
+          0.0,
+          -0.25,
+          1.0
+        ]
+      },
+      "warmup_frames": 60,
+      "measure_frames": 300,
+      "kind": {
+        "type": "static_high_density",
+        "draw_radius": 10,
+        "vertical_layers": 4
+      }
+    },
+    {
+      "id": "dynamic_remesh",
+      "description": "Dynamic updates \u2014 continuous voxel edits, measures remesh latency",
+      "terrain": {
+        "seed": 99999,
+        "sea_level": 32,
+        "amplitude": 16.0,
+        "frequency": 0.015,
+        "octaves": 4,
+        "persistence": 0.5,
+        "lacunarity": 2.0
+      },
+      "camera": {
+        "position": [
+          0.0,
+          80.0,
+          -60.0
+        ],
+        "forward": [
+          0.0,
+          -0.25,
+          1.0
+        ]
+      },
+      "warmup_frames": 30,
+      "measure_frames": 300,
+      "kind": {
+        "type": "dynamic_remesh",
+        "edits_per_frame": 1024,
+        "edit_radius": 48.0
+      }
+    },
+    {
+      "id": "stress_test",
+      "description": "Stress test \u2014 increasing voxel count until FPS drops below 30",
+      "terrain": {
+        "seed": 42,
+        "sea_level": 32,
+        "amplitude": 8.0,
+        "frequency": 0.02,
+        "octaves": 3,
+        "persistence": 0.5,
+        "lacunarity": 2.0
+      },
+      "camera": {
+        "position": [
+          0.0,
+          120.0,
+          -150.0
+        ],
+        "forward": [
+          0.0,
+          -0.3,
+          1.0
+        ]
+      },
+      "warmup_frames": 30,
+      "measure_frames": 1200,
+      "kind": {
+        "type": "stress_test",
+        "voxels_per_step": 4096,
+        "fps_floor": 30.0
+      }
+    }
+  ]
+}
