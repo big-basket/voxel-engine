@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use winit::{
     application::ApplicationHandler,
-    event::{DeviceEvent, DeviceId, ElementState, KeyEvent, WindowEvent},
+    event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     window::{CursorGrabMode, Window, WindowId},
@@ -23,7 +23,6 @@ use renderer::NaiveRenderer;
 fn main() {
     env_logger::init();
 
-    // If --bench is passed, run headless benchmarks and exit.
     if std::env::args().any(|a| a == "--bench") {
         bench::run_benchmarks();
         return;
@@ -31,10 +30,11 @@ fn main() {
 
     let event_loop = EventLoop::new().expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-
     let mut app = App::Uninitialized;
     event_loop.run_app(&mut app).expect("run event loop");
 }
+
+// ── Application state ─────────────────────────────────────────────────────────
 
 enum App {
     Uninitialized,
@@ -42,22 +42,20 @@ enum App {
 }
 
 struct RunningState {
-    renderer: NaiveRenderer,
-    camera: Camera,
-    controller: CameraController,
-    input: InputState,
-    last_frame: std::time::Instant,
+    renderer:       NaiveRenderer,
+    camera:         Camera,
+    controller:     CameraController,
+    input:          InputState,
+    last_frame:     std::time::Instant,
     mouse_captured: bool,
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if matches!(self, App::Running(_)) {
-            return;
-        }
+        if matches!(self, App::Running(_)) { return; }
 
         let window_attrs = Window::default_attributes()
-            .with_title("Voxel Engine — Naive Renderer")
+            .with_title("Voxel Engine — Naive Renderer  |  LMB: dig  RMB: place  Tab: cycle block  Esc: release mouse")
             .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
 
         let window = Arc::new(
@@ -74,19 +72,15 @@ impl ApplicationHandler for App {
             }
         };
 
-        // sea_level=32 with amplitude=24, so surface is roughly y=32..56.
-        // Chunk y=1 covers world y=32..63 — start above it looking down-forward.
         let mut camera = Camera::new(size.width as f32 / size.height as f32);
-        camera.position = glam::Vec3::new(0.0, 100.0, -80.0);
-
-        let controller = CameraController::new(ControllerConfig::default());
+        camera.position = glam::Vec3::new(0.0, 80.0, 0.0);
 
         *self = App::Running(RunningState {
             renderer,
             camera,
-            controller,
-            input: InputState::new(),
-            last_frame: std::time::Instant::now(),
+            controller:     CameraController::new(ControllerConfig::default()),
+            input:          InputState::new(),
+            last_frame:     std::time::Instant::now(),
             mouse_captured: false,
         });
     }
@@ -111,12 +105,10 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 let pressed = element_state == ElementState::Pressed;
-
                 if let Some(key) = map_key(key_code) {
                     if pressed { state.input.press(key); }
                     else       { state.input.release(key); }
                 }
-
                 if pressed {
                     match key_code {
                         KeyCode::Escape => {
@@ -127,20 +119,47 @@ impl ApplicationHandler for App {
                                 event_loop.exit();
                             }
                         }
+                        // Cycle the block type placed by right-click
+                        KeyCode::Tab => {
+                            state.renderer.cycle_place_voxel();
+                        }
                         _ => {}
                     }
                 }
             }
 
-            // Click to capture mouse for look
-            WindowEvent::MouseInput {
-                state: element_state,
-                button: winit::event::MouseButton::Left,
-                ..
-            } => {
-                if element_state == ElementState::Pressed && !state.mouse_captured {
-                    capture_cursor(&state.renderer.window);
-                    state.mouse_captured = true;
+            WindowEvent::MouseInput { state: btn_state, button, .. } => {
+                let pressed = btn_state == ElementState::Pressed;
+                log::debug!("mouse button: {:?} pressed={} captured={}", button, pressed, state.mouse_captured);
+
+                // Left-click: capture mouse on first click, dig on subsequent clicks
+                if button == MouseButton::Left && pressed {
+                    if !state.mouse_captured {
+                        log::info!("LMB: capturing cursor");
+                        capture_cursor(&state.renderer.window);
+                        state.mouse_captured = true;
+                    } else {
+                        log::info!("LMB: firing raycast for dig");
+                        if let Some(hit) = state.renderer.raycast(&state.camera) {
+                            state.renderer.dig(&hit);
+                        } else {
+                            log::info!("LMB: no hit — nothing to dig");
+                        }
+                    }
+                }
+
+                // Right-click: place voxel (only when mouse is captured)
+                if button == MouseButton::Right && pressed {
+                    if !state.mouse_captured {
+                        log::info!("RMB: mouse not captured yet — ignoring");
+                    } else {
+                        log::info!("RMB: firing raycast for place");
+                        if let Some(hit) = state.renderer.raycast(&state.camera) {
+                            state.renderer.place(&hit);
+                        } else {
+                            log::info!("RMB: no hit — nothing to place");
+                        }
+                    }
                 }
             }
 
@@ -155,8 +174,7 @@ impl ApplicationHandler for App {
                 state.last_frame = now;
 
                 let axes = state.input.movement_axes();
-                let sprinting = state.input.sprinting();
-                state.controller.apply_movement(&mut state.camera, axes, dt, sprinting);
+                state.controller.apply_movement(&mut state.camera, axes, dt, state.input.sprinting());
                 state.controller.update_camera_look(&mut state.camera);
 
                 match state.renderer.render(&state.camera) {
@@ -186,7 +204,6 @@ impl ApplicationHandler for App {
         event: DeviceEvent,
     ) {
         let App::Running(state) = self else { return };
-
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
             if state.mouse_captured {
                 state.input.accumulate_mouse(dx as f32, dy as f32);
@@ -207,7 +224,6 @@ impl ApplicationHandler for App {
 
 fn capture_cursor(window: &Window) {
     window.set_cursor_visible(false);
-    // Try confined first (Wayland), fall back to locked (X11/Windows)
     if window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
         let _ = window.set_cursor_grab(CursorGrabMode::Locked);
     }

@@ -92,7 +92,7 @@
       "measure_frames": 1200,
       "kind": {
         "type": "stress_test",
-        "voxels_per_step": 4096,
+        "voxels_per_step": 8192,
         "fps_floor": 30.0
       }
     }

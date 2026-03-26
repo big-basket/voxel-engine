@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use glam::IVec3;
 use wgpu::{
@@ -12,23 +13,28 @@ use voxel_core::{
     camera::{Camera, CameraUniform},
     gen::{TerrainParams, generate_chunk},
     gpu::{GpuContext, GpuError, create_uniform_buffer, write_uniform},
+    input::{RayHit, place, raycast, remove},
+    world::{VoxelId, World, CHUNK_SIZE_I, chunk_pos_of},
 };
 
 use crate::mesh::build_chunk_mesh;
 use crate::pipeline::{ChunkUniform, NaivePipeline};
 
-/// All GPU resources for one renderable chunk.
+// ── Per-chunk GPU resources ───────────────────────────────────────────────────
+
 #[allow(dead_code)]
 struct ChunkDraw {
-    vertex_buf: wgpu::Buffer,
-    index_buf:  wgpu::Buffer,
+    chunk_pos:   IVec3,
+    vertex_buf:  wgpu::Buffer,
+    index_buf:   wgpu::Buffer,
     index_count: u32,
-    chunk_buf:  wgpu::Buffer,
+    chunk_buf:   wgpu::Buffer,
     chunk_bind_group: wgpu::BindGroup,
 }
 
+// ── Renderer ──────────────────────────────────────────────────────────────────
+
 pub struct NaiveRenderer {
-    // Window first — must outlive surface (drop order = declaration order, reversed)
     pub window: Arc<Window>,
 
     pub gpu: GpuContext,
@@ -41,10 +47,19 @@ pub struct NaiveRenderer {
     pub camera_bind_group: wgpu::BindGroup,
 
     depth_texture: wgpu::Texture,
-    depth_view: wgpu::TextureView,
+    depth_view:    wgpu::TextureView,
 
-    pipeline: NaivePipeline,
-    chunk_draws: Vec<ChunkDraw>,
+    pipeline:    NaivePipeline,
+    chunk_draws: HashMap<IVec3, ChunkDraw>,
+
+    /// The live world — kept here so the brush can mutate it each frame.
+    pub world: World,
+
+    /// Voxel type placed by right-click. Cycle with Tab.
+    pub place_voxel: VoxelId,
+
+    /// Raycast reach in world units.
+    pub reach: f32,
 }
 
 impl NaiveRenderer {
@@ -52,11 +67,9 @@ impl NaiveRenderer {
 
     pub fn new(window: Arc<Window>, width: u32, height: u32) -> Result<Self, GpuError> {
         let instance = GpuContext::create_instance();
-
         let surface = instance
             .create_surface(Arc::clone(&window))
             .expect("create surface");
-
         let gpu = GpuContext::from_surface(instance, &surface, wgpu::Features::empty())?;
         log::info!("GPU: {}", gpu.adapter_info());
 
@@ -64,13 +77,11 @@ impl NaiveRenderer {
         let surface_format = caps.formats.iter()
             .find(|f| f.is_srgb()).copied()
             .unwrap_or(caps.formats[0]);
-
         let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
             wgpu::PresentMode::Fifo
         } else {
             wgpu::PresentMode::AutoVsync
         };
-
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -83,7 +94,6 @@ impl NaiveRenderer {
         };
         surface.configure(&gpu.device, &config);
 
-        // ── Camera uniform ────────────────────────────────────────────────
         let camera_buf = create_uniform_buffer::<CameraUniform>(&gpu.device, "camera uniform");
 
         let camera_bind_group_layout =
@@ -110,137 +120,210 @@ impl NaiveRenderer {
             }],
         });
 
-        // ── Depth buffer ──────────────────────────────────────────────────
         let (depth_texture, depth_view) =
             Self::create_depth_texture(&gpu.device, width.max(1), height.max(1));
 
-        // ── Pipeline ──────────────────────────────────────────────────────
         let pipeline = NaivePipeline::new(
-            &gpu.device,
-            surface_format,
-            &camera_bind_group_layout,
-            Self::DEPTH_FORMAT,
+            &gpu.device, surface_format,
+            &camera_bind_group_layout, Self::DEPTH_FORMAT,
         );
 
-        // ── Generate test world ───────────────────────────────────────────
-        let chunk_draws = Self::generate_world(
-            &gpu.device,
-            &pipeline,
-        );
+        // Build world and initial meshes
+        let world = Self::build_world();
+        let chunk_draws = Self::mesh_all_chunks(&gpu.device, &pipeline, &world);
+        log::info!("Generated {} chunk draw calls", chunk_draws.len());
 
         Ok(NaiveRenderer {
-            window,
-            gpu,
-            surface,
-            config,
-            camera_buf,
-            camera_bind_group_layout,
-            camera_bind_group,
-            depth_texture,
-            depth_view,
-            pipeline,
-            chunk_draws,
+            window, gpu, surface, config,
+            camera_buf, camera_bind_group_layout, camera_bind_group,
+            depth_texture, depth_view,
+            pipeline, chunk_draws, world,
+            place_voxel: VoxelId::STONE,
+            reach: 100.0,
         })
     }
 
-    /// Generates a 5×4×5 chunk world, inserts all chunks into a World so
-    /// inter-chunk face culling works, then meshes each chunk.
-    fn generate_world(
+    // ── World construction ────────────────────────────────────────────────────
+
+    fn build_world() -> World {
+        let params = TerrainParams::default();
+        let mut world = World::new();
+        for cy in -2i32..=1 {
+            for cz in -2i32..=2 {
+                for cx in -2i32..=2 {
+                    let pos = IVec3::new(cx, cy, cz);
+                    world.insert_chunk(pos, generate_chunk(pos, &params));
+                }
+            }
+        }
+        world
+    }
+
+    fn mesh_all_chunks(
         device: &wgpu::Device,
         pipeline: &NaivePipeline,
-    ) -> Vec<ChunkDraw> {
-        use voxel_core::world::World;
-
-        let params = TerrainParams::default();
-
-        // Range: x/z = -2..=2, y = -2..=1
-        // sea_level=32, so surface is in chunk y=1 (world y=32..64).
-        // y=-2 = deep stone, y=-1 = lower stone, y=0 = upper stone/dirt, y=1 = surface+grass
-        let x_range = -2i32..=2;
-        let y_range = -2i32..=1;
-        let z_range = -2i32..=2;
-
-        // Phase 1: generate and insert all chunks into the world
-        let mut world = World::new();
-        for cy in y_range.clone() {
-            for cz in z_range.clone() {
-                for cx in x_range.clone() {
-                    let pos = IVec3::new(cx, cy, cz);
-                    let chunk = generate_chunk(pos, &params);
-                    world.insert_chunk(pos, chunk);
-                }
+        world: &World,
+    ) -> HashMap<IVec3, ChunkDraw> {
+        let positions: Vec<IVec3> = world.chunks.keys().copied().collect();
+        let mut draws = HashMap::new();
+        for chunk_pos in positions {
+            if let Some(draw) = Self::mesh_chunk(device, pipeline, world, chunk_pos) {
+                draws.insert(chunk_pos, draw);
             }
         }
-
-        // Phase 2: mesh each chunk with cross-chunk neighbour awareness
-        let mut draws = Vec::new();
-        for cy in y_range {
-            for cz in z_range.clone() {
-                for cx in x_range.clone() {
-                    let chunk_pos = IVec3::new(cx, cy, cz);
-                    let chunk = world.get_chunk(&chunk_pos).unwrap();
-                    let (verts, idx) = build_chunk_mesh(chunk, chunk_pos, &world);
-
-                    if verts.is_empty() {
-                        continue;
-                    }
-
-                    let vertex_buf = device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("chunk vbuf"),
-                            contents: bytemuck::cast_slice(&verts),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        },
-                    );
-
-                    let index_buf = device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("chunk ibuf"),
-                            contents: bytemuck::cast_slice(&idx),
-                            usage: wgpu::BufferUsages::INDEX,
-                        },
-                    );
-
-                    use voxel_core::world::CHUNK_SIZE_I;
-                    let origin = [
-                        (cx * CHUNK_SIZE_I) as f32,
-                        (cy * CHUNK_SIZE_I) as f32,
-                        (cz * CHUNK_SIZE_I) as f32,
-                        0.0f32,
-                    ];
-                    let chunk_uniform = ChunkUniform { origin };
-
-                    let chunk_buf = device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("chunk uniform"),
-                            contents: bytemuck::bytes_of(&chunk_uniform),
-                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        },
-                    );
-
-                    let chunk_bind_group =
-                        device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("chunk bg"),
-                            layout: &pipeline.chunk_bind_group_layout,
-                            entries: &[wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: chunk_buf.as_entire_binding(),
-                            }],
-                        });
-
-                    draws.push(ChunkDraw {
-                        vertex_buf,
-                        index_buf,
-                        index_count: idx.len() as u32,
-                        chunk_buf,
-                        chunk_bind_group,
-                    });
-                }
-            }
-        }
-
-        log::info!("Generated {} chunk draw calls", draws.len());
         draws
+    }
+
+    /// Meshes a single chunk. Returns None if the mesh is empty (all-air chunk).
+    fn mesh_chunk(
+        device: &wgpu::Device,
+        pipeline: &NaivePipeline,
+        world: &World,
+        chunk_pos: IVec3,
+    ) -> Option<ChunkDraw> {
+        let chunk = world.get_chunk(&chunk_pos)?;
+        let (verts, idx) = build_chunk_mesh(chunk, chunk_pos, world);
+        if verts.is_empty() {
+            return None;
+        }
+
+        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("chunk vbuf"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("chunk ibuf"),
+            contents: bytemuck::cast_slice(&idx),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let origin = [
+            (chunk_pos.x * CHUNK_SIZE_I) as f32,
+            (chunk_pos.y * CHUNK_SIZE_I) as f32,
+            (chunk_pos.z * CHUNK_SIZE_I) as f32,
+            0.0f32,
+        ];
+        let chunk_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("chunk uniform"),
+            contents: bytemuck::bytes_of(&ChunkUniform { origin }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let chunk_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("chunk bg"),
+            layout: &pipeline.chunk_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: chunk_buf.as_entire_binding(),
+            }],
+        });
+
+        Some(ChunkDraw {
+            chunk_pos,
+            vertex_buf, index_buf,
+            index_count: idx.len() as u32,
+            chunk_buf, chunk_bind_group,
+        })
+    }
+
+    // ── Brush ─────────────────────────────────────────────────────────────────
+
+    /// Casts a ray from the camera and returns the hit, if any.
+    pub fn raycast(&self, camera: &Camera) -> Option<RayHit> {
+        log::debug!(
+            "raycast: origin={:.2?} forward={:.2?} reach={}",
+            camera.position, camera.forward, self.reach
+        );
+        let result = raycast(&self.world, camera.position, camera.forward, self.reach);
+        match &result {
+            Some(hit) => log::info!(
+                "raycast HIT: voxel={:?} prev={:?} dist={:.2}",
+                hit.voxel_pos, hit.prev_pos, hit.distance
+            ),
+            None => log::debug!("raycast: no hit within reach={}", self.reach),
+        }
+        result
+    }
+
+    /// Removes the voxel at the hit position and remeshes affected chunks.
+    pub fn dig(&mut self, hit: &RayHit) {
+        let voxel = self.world.get_voxel(hit.voxel_pos);
+        log::info!("dig: target={:?} voxel={:?}", hit.voxel_pos, voxel);
+        if remove(&mut self.world, hit) {
+            log::info!("dig: removed voxel at {:?}, remeshing...", hit.voxel_pos);
+            self.remesh_around(hit.voxel_pos);
+        } else {
+            log::warn!("dig: remove returned false — chunk {:?} not loaded?",
+                chunk_pos_of(hit.voxel_pos));
+        }
+    }
+
+    /// Places `self.place_voxel` at the face in front of the hit and remeshes.
+    pub fn place(&mut self, hit: &RayHit) {
+        log::info!(
+            "place: target={:?} voxel={:?} (current at target: {:?})",
+            hit.prev_pos, self.place_voxel,
+            self.world.get_voxel(hit.prev_pos)
+        );
+        if place(&mut self.world, hit, self.place_voxel) {
+            log::info!("place: placed {:?} at {:?}, remeshing...", self.place_voxel, hit.prev_pos);
+            self.remesh_around(hit.prev_pos);
+        } else {
+            log::warn!("place: place returned false — chunk {:?} not loaded or placing AIR?",
+                chunk_pos_of(hit.prev_pos));
+        }
+    }
+
+    /// Cycles through placeable voxel types.
+    pub fn cycle_place_voxel(&mut self) {
+        self.place_voxel = match self.place_voxel {
+            VoxelId::STONE => VoxelId::DIRT,
+            VoxelId::DIRT  => VoxelId::GRASS,
+            VoxelId::GRASS => VoxelId::SAND,
+            VoxelId::SAND  => VoxelId::STONE,
+            _              => VoxelId::STONE,
+        };
+        log::info!("cycle_place_voxel: now placing {:?}", self.place_voxel);
+    }
+
+    /// Remeshes the chunk containing `world_pos` and its face-adjacent
+    /// neighbours, since a voxel edit at a chunk boundary affects both sides.
+    fn remesh_around(&mut self, world_pos: IVec3) {
+        let edited_chunk = chunk_pos_of(world_pos);
+        log::debug!("remesh_around: world_pos={:?} -> chunk={:?}", world_pos, edited_chunk);
+
+        let neighbours = [
+            IVec3::new( 1, 0, 0), IVec3::new(-1, 0, 0),
+            IVec3::new( 0, 1, 0), IVec3::new( 0,-1, 0),
+            IVec3::new( 0, 0, 1), IVec3::new( 0, 0,-1),
+        ];
+
+        let mut to_remesh = vec![edited_chunk];
+        for &offset in &neighbours {
+            let nb = edited_chunk + offset;
+            if self.world.get_chunk(&nb).is_some() {
+                to_remesh.push(nb);
+            }
+        }
+
+        log::debug!("remesh_around: remeshing {} chunk(s): {:?}", to_remesh.len(), to_remesh);
+
+        for chunk_pos in to_remesh {
+            if let Some(chunk) = self.world.get_chunk_mut(&chunk_pos) {
+                chunk.mark_clean();
+            }
+            match Self::mesh_chunk(&self.gpu.device, &self.pipeline, &self.world, chunk_pos) {
+                Some(draw) => {
+                    log::debug!("remesh_around: chunk {:?} -> {} indices", chunk_pos, draw.index_count);
+                    self.chunk_draws.insert(chunk_pos, draw);
+                }
+                None => {
+                    log::debug!("remesh_around: chunk {:?} -> empty (removed from draws)", chunk_pos);
+                    self.chunk_draws.remove(&chunk_pos);
+                }
+            }
+        }
+
+        log::info!("remesh_around: done. total draw calls: {}", self.chunk_draws.len());
     }
 
     // ── Resize ────────────────────────────────────────────────────────────────
@@ -258,7 +341,6 @@ impl NaiveRenderer {
     // ── Render ────────────────────────────────────────────────────────────────
 
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
-        // Upload camera uniform
         write_uniform(
             &self.gpu.queue,
             &self.camera_buf,
@@ -267,7 +349,6 @@ impl NaiveRenderer {
 
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
-
         let mut encoder = self.gpu.device.create_command_encoder(
             &CommandEncoderDescriptor { label: Some("naive frame") },
         );
@@ -279,9 +360,7 @@ impl NaiveRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color {
-                            r: 0.53, g: 0.81, b: 0.98, a: 1.0, // sky blue
-                        }),
+                        load: LoadOp::Clear(wgpu::Color { r: 0.53, g: 0.81, b: 0.98, a: 1.0 }),
                         store: StoreOp::Store,
                     },
                 })],
@@ -300,7 +379,7 @@ impl NaiveRenderer {
             pass.set_pipeline(&self.pipeline.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-            for draw in &self.chunk_draws {
+            for draw in self.chunk_draws.values() {
                 pass.set_bind_group(1, &draw.chunk_bind_group, &[]);
                 pass.set_vertex_buffer(0, draw.vertex_buf.slice(..));
                 pass.set_index_buffer(draw.index_buf.slice(..), wgpu::IndexFormat::Uint32);
@@ -314,9 +393,7 @@ impl NaiveRenderer {
     }
 
     #[allow(dead_code)]
-    pub fn surface_format(&self) -> wgpu::TextureFormat {
-        self.config.format
-    }
+    pub fn surface_format(&self) -> wgpu::TextureFormat { self.config.format }
 
     fn create_depth_texture(
         device: &wgpu::Device,
