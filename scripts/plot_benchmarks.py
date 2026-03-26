@@ -22,6 +22,8 @@ import sys
 from itertools import groupby
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend — works without a display
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -215,7 +217,8 @@ def make_stress_figure(summaries, frames, renderer, compare_summaries=None,
         print(f"  skipping stress figure — no data for '{scene}'")
         return
 
-    steps = load_stress_steps(frames[scene])
+    df = frames[scene]
+    steps = load_stress_steps(df)
     draws = [s["draws"]   for s in steps]
     fps   = [s["avg_fps"] for s in steps]
     ms    = [s["avg_ms"]  for s in steps]
@@ -223,17 +226,20 @@ def make_stress_figure(summaries, frames, renderer, compare_summaries=None,
 
     has_compare = compare_frames and scene in compare_frames
     if has_compare:
-        csteps = load_stress_steps(compare_frames[scene])
+        cdf    = compare_frames[scene]
+        csteps = load_stress_steps(cdf)
         cdraws = [s["draws"]   for s in csteps]
         cfps   = [s["avg_fps"] for s in csteps]
         cms    = [s["avg_ms"]  for s in csteps]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-    fig.suptitle("Scene 3: Stress test — FPS vs draw call count",
-                 fontsize=12, fontweight="medium", color="#2C2C2A", y=1.01)
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    fig.suptitle("Scene 3: Stress test", fontsize=12, fontweight="medium",
+                 color="#2C2C2A", y=1.01)
+
+    # ── Row 1: step-level charts ───────────────────────────────────────────────
 
     # FPS vs draw calls
-    ax = axes[0]
+    ax = axes[0, 0]
     ax.plot(draws, fps, "o-", color=BLUE, linewidth=1.8, markersize=5,
             label=renderer)
     if has_compare:
@@ -246,7 +252,7 @@ def make_stress_figure(summaries, frames, renderer, compare_summaries=None,
     ax.legend()
 
     # Frame time vs draw calls
-    ax = axes[1]
+    ax = axes[0, 1]
     ax.plot(draws, ms, "o-", color=BLUE, linewidth=1.8, markersize=5,
             label=renderer)
     if has_compare:
@@ -259,7 +265,7 @@ def make_stress_figure(summaries, frames, renderer, compare_summaries=None,
     ax.legend()
 
     # FPS vs triangle count
-    ax = axes[2]
+    ax = axes[0, 2]
     ax.plot(tris, fps, "o-", color=BLUE, linewidth=1.8, markersize=5,
             label=renderer)
     if has_compare:
@@ -271,6 +277,43 @@ def make_stress_figure(summaries, frames, renderer, compare_summaries=None,
     ax.set_ylabel("Avg FPS")
     ax.set_title("FPS vs triangle count")
     ax.legend()
+
+    # ── Row 2: per-frame charts (same as scenes 1 and 2) ──────────────────────
+
+    # Frame time over all measured frames
+    ax = axes[1, 0]
+    plot_frame_time(ax, df, renderer, BLUE)
+    if has_compare:
+        plot_frame_time(ax, cdf, compare_renderer, CORAL)
+    ax.set_title("Frame time per frame (ms) — all steps")
+    ax.legend()
+
+    # FPS distribution
+    ax = axes[1, 1]
+    plot_fps_distribution(ax, df, renderer, BLUE)
+    if has_compare:
+        plot_fps_distribution(ax, cdf, compare_renderer, CORAL)
+    ax.set_title("FPS distribution — all steps")
+    ax.legend()
+
+    # Per-step min FPS (shows worst single frame at each radius)
+    ax = axes[1, 2]
+    min_fps = [s["min_fps"] for s in steps]
+    ax.plot(draws, min_fps, "o-", color=BLUE, linewidth=1.8, markersize=5,
+            label=f"{renderer} min FPS")
+    ax.plot(draws, fps, "--", color=BLUE, linewidth=1, alpha=0.5,
+            label=f"{renderer} avg FPS")
+    if has_compare:
+        cmin_fps = [s["min_fps"] for s in csteps]
+        ax.plot(cdraws, cmin_fps, "s-", color=CORAL, linewidth=1.8, markersize=5,
+                label=f"{compare_renderer} min FPS")
+        ax.plot(cdraws, cfps, "--", color=CORAL, linewidth=1, alpha=0.5,
+                label=f"{compare_renderer} avg FPS")
+    ax.axhline(30, color=GRAY, linewidth=1, linestyle="--", label="30 FPS floor")
+    ax.set_xlabel("Draw calls")
+    ax.set_ylabel("FPS")
+    ax.set_title("Min vs avg FPS per step")
+    ax.legend(fontsize=8)
 
     fig.tight_layout()
     _save(fig, out_dir, "scene3_stress_test.png")
@@ -327,16 +370,12 @@ def make_summary_table(summaries, frames, renderer, compare_summaries=None,
 
 
 def _save(fig, out_dir, filename):
-    if out_dir:
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / filename
-        fig.savefig(path, bbox_inches="tight", dpi=150)
-        print(f"  Saved: {path}")
-        plt.close(fig)
-    else:
-        plt.show()
-        plt.close(fig)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / filename
+    fig.savefig(path, bbox_inches="tight", dpi=150)
+    print(f"  Saved: {path}")
+    plt.close(fig)
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -350,6 +389,10 @@ def main():
     parser.add_argument("--out",      default=None,
                         help="Output directory for saved PNGs (default: show interactively)")
     args = parser.parse_args()
+
+    if args.out is None:
+        args.out = Path(args.results).parent / "figures"
+        print(f"No --out specified, saving to: {args.out}")
 
     print(f"Loading: {args.results}")
     renderer, summaries, frames = load_results(args.results)
