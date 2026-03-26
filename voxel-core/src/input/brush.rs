@@ -96,20 +96,53 @@ pub fn raycast(
     }
 }
 
-/// Removes the voxel at `hit.voxel_pos` (sets it to AIR).
-/// Returns true if the chunk was loaded and the write succeeded.
-pub fn remove(world: &mut World, hit: &RayHit) -> bool {
-    world.set_voxel(hit.voxel_pos, VoxelId::AIR)
+/// Removes voxels in a sphere around `hit.voxel_pos` (sets them to AIR).
+/// Returns a list of positions that were successfully modified.
+pub fn remove(world: &mut World, hit: &RayHit, radius: u32) -> Vec<IVec3> {
+    let mut modified = Vec::new();
+    let center = hit.voxel_pos;
+    let r = radius as i32;
+
+    for x in -r..=r {
+        for y in -r..=r {
+            for z in -r..=r {
+                if x * x + y * y + z * z <= r * r {
+                    let pos = center + IVec3::new(x, y, z);
+                    if world.set_voxel(pos, VoxelId::AIR) {
+                        modified.push(pos);
+                    }
+                }
+            }
+        }
+    }
+    modified
 }
 
-/// Places `id` at `hit.prev_pos` (the face in front of the hit voxel).
-/// Returns false if the target chunk is not loaded.
-pub fn place(world: &mut World, hit: &RayHit, id: VoxelId) -> bool {
+/// Places `id` in a sphere around `hit.prev_pos` (the face in front of the hit voxel).
+/// Returns a list of positions that were successfully modified.
+pub fn place(world: &mut World, hit: &RayHit, id: VoxelId, radius: u32) -> Vec<IVec3> {
     // Don't place on top of air (shouldn't happen from a real hit, but guard it).
     if id.is_air() {
-        return false;
+        return vec![];
     }
-    world.set_voxel(hit.prev_pos, id)
+    
+    let mut modified = Vec::new();
+    let center = hit.prev_pos;
+    let r = radius as i32;
+
+    for x in -r..=r {
+        for y in -r..=r {
+            for z in -r..=r {
+                if x * x + y * y + z * z <= r * r {
+                    let pos = center + IVec3::new(x, y, z);
+                    if world.set_voxel(pos, id) {
+                        modified.push(pos);
+                    }
+                }
+            }
+        }
+    }
+    modified
 }
 
 #[cfg(test)]
@@ -166,8 +199,8 @@ mod tests {
         let mut world = flat_world();
         let hit = raycast(&world, Vec3::new(0.5, 5.0, 0.5), Vec3::NEG_Y, 20.0)
             .expect("should hit");
-        let success = remove(&mut world, &hit);
-        assert!(success);
+        let modified = remove(&mut world, &hit, 0);
+        assert!(!modified.is_empty());
         assert_eq!(world.get_voxel(hit.voxel_pos), VoxelId::AIR);
     }
 
@@ -177,8 +210,8 @@ mod tests {
         let hit = raycast(&world, Vec3::new(0.5, 5.0, 0.5), Vec3::NEG_Y, 20.0)
             .expect("should hit");
         let place_pos = hit.prev_pos;
-        let success = place(&mut world, &hit, VoxelId::DIRT);
-        assert!(success);
+        let modified = place(&mut world, &hit, VoxelId::DIRT, 0);
+        assert!(!modified.is_empty());
         assert_eq!(world.get_voxel(place_pos), VoxelId::DIRT);
     }
 
@@ -187,8 +220,8 @@ mod tests {
         let mut world = flat_world();
         let hit = raycast(&world, Vec3::new(0.5, 5.0, 0.5), Vec3::NEG_Y, 20.0)
             .expect("should hit");
-        let success = place(&mut world, &hit, VoxelId::AIR);
-        assert!(!success, "placing AIR should be rejected");
+        let modified = place(&mut world, &hit, VoxelId::AIR, 0);
+        assert!(modified.is_empty(), "placing AIR should be rejected");
     }
 
     #[test]

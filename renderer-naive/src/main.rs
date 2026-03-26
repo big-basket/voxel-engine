@@ -55,7 +55,7 @@ impl ApplicationHandler for App {
         if matches!(self, App::Running(_)) { return; }
 
         let window_attrs = Window::default_attributes()
-            .with_title("Voxel Engine — Naive Renderer  |  LMB: dig  RMB: place  Tab: cycle block  Esc: release mouse")
+            .with_title("Voxel Engine — Naive Renderer  |  LMB: dig  RMB: place  Tab: cycle block  Esc: release mouse  [-]/[+]: brush size")
             .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
 
         let window = Arc::new(
@@ -122,6 +122,14 @@ impl ApplicationHandler for App {
                         // Cycle the block type placed by right-click
                         KeyCode::Tab => {
                             state.renderer.cycle_place_voxel();
+                        }
+                        // Increase Brush Size
+                        KeyCode::BracketRight | KeyCode::Equal | KeyCode::NumpadAdd => {
+                            state.renderer.increase_brush();
+                        }
+                        // Decrease Brush Size
+                        KeyCode::BracketLeft | KeyCode::Minus | KeyCode::NumpadSubtract => {
+                            state.renderer.decrease_brush();
                         }
                         _ => {}
                     }

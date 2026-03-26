@@ -1,5 +1,5 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::collections::HashMap;
 
 use glam::IVec3;
 use wgpu::{
@@ -60,6 +60,9 @@ pub struct NaiveRenderer {
 
     /// Raycast reach in world units.
     pub reach: f32,
+
+    /// Radius of the brush for digging and placing.
+    pub brush_radius: u32,
 }
 
 impl NaiveRenderer {
@@ -139,7 +142,8 @@ impl NaiveRenderer {
             depth_texture, depth_view,
             pipeline, chunk_draws, world,
             place_voxel: VoxelId::STONE,
-            reach: 100.0,
+            reach: 50.0,
+            brush_radius: 0,
         })
     }
 
@@ -244,32 +248,33 @@ impl NaiveRenderer {
         result
     }
 
-    /// Removes the voxel at the hit position and remeshes affected chunks.
+    /// Removes voxels at the hit position and remeshes affected chunks.
     pub fn dig(&mut self, hit: &RayHit) {
         let voxel = self.world.get_voxel(hit.voxel_pos);
-        log::info!("dig: target={:?} voxel={:?}", hit.voxel_pos, voxel);
-        if remove(&mut self.world, hit) {
-            log::info!("dig: removed voxel at {:?}, remeshing...", hit.voxel_pos);
-            self.remesh_around(hit.voxel_pos);
+        log::info!("dig: target={:?} voxel={:?} radius={}", hit.voxel_pos, voxel, self.brush_radius);
+        
+        let modified = remove(&mut self.world, hit, self.brush_radius);
+        if !modified.is_empty() {
+            log::info!("dig: removed {} voxels, remeshing...", modified.len());
+            self.remesh_modified(&modified);
         } else {
-            log::warn!("dig: remove returned false — chunk {:?} not loaded?",
-                chunk_pos_of(hit.voxel_pos));
+            log::warn!("dig: no voxels removed (none loaded?)");
         }
     }
 
     /// Places `self.place_voxel` at the face in front of the hit and remeshes.
     pub fn place(&mut self, hit: &RayHit) {
         log::info!(
-            "place: target={:?} voxel={:?} (current at target: {:?})",
-            hit.prev_pos, self.place_voxel,
-            self.world.get_voxel(hit.prev_pos)
+            "place: target={:?} voxel={:?} radius={}",
+            hit.prev_pos, self.place_voxel, self.brush_radius
         );
-        if place(&mut self.world, hit, self.place_voxel) {
-            log::info!("place: placed {:?} at {:?}, remeshing...", self.place_voxel, hit.prev_pos);
-            self.remesh_around(hit.prev_pos);
+        
+        let modified = place(&mut self.world, hit, self.place_voxel, self.brush_radius);
+        if !modified.is_empty() {
+            log::info!("place: placed {} voxels, remeshing...", modified.len());
+            self.remesh_modified(&modified);
         } else {
-            log::warn!("place: place returned false — chunk {:?} not loaded or placing AIR?",
-                chunk_pos_of(hit.prev_pos));
+            log::warn!("place: no voxels placed (none loaded or AIR?)");
         }
     }
 
@@ -285,27 +290,38 @@ impl NaiveRenderer {
         log::info!("cycle_place_voxel: now placing {:?}", self.place_voxel);
     }
 
-    /// Remeshes the chunk containing `world_pos` and its face-adjacent
-    /// neighbours, since a voxel edit at a chunk boundary affects both sides.
-    fn remesh_around(&mut self, world_pos: IVec3) {
-        let edited_chunk = chunk_pos_of(world_pos);
-        log::debug!("remesh_around: world_pos={:?} -> chunk={:?}", world_pos, edited_chunk);
+    pub fn increase_brush(&mut self) {
+        self.brush_radius = (self.brush_radius + 1).min(20);
+        log::info!("increase_brush: radius is now {}", self.brush_radius);
+    }
+
+    pub fn decrease_brush(&mut self) {
+        self.brush_radius = self.brush_radius.saturating_sub(1);
+        log::info!("decrease_brush: radius is now {}", self.brush_radius);
+    }
+
+    /// Remeshes chunks containing the modified voxels and their face-adjacent neighbours.
+    fn remesh_modified(&mut self, modified: &[IVec3]) {
+        let mut to_remesh = HashSet::new();
 
         let neighbours = [
+            IVec3::ZERO,
             IVec3::new( 1, 0, 0), IVec3::new(-1, 0, 0),
             IVec3::new( 0, 1, 0), IVec3::new( 0,-1, 0),
             IVec3::new( 0, 0, 1), IVec3::new( 0, 0,-1),
         ];
 
-        let mut to_remesh = vec![edited_chunk];
-        for &offset in &neighbours {
-            let nb = edited_chunk + offset;
-            if self.world.get_chunk(&nb).is_some() {
-                to_remesh.push(nb);
+        for &pos in modified {
+            for &offset in &neighbours {
+                let nb_pos = pos + offset;
+                let chunk_pos = chunk_pos_of(nb_pos);
+                if self.world.get_chunk(&chunk_pos).is_some() {
+                    to_remesh.insert(chunk_pos);
+                }
             }
         }
 
-        log::debug!("remesh_around: remeshing {} chunk(s): {:?}", to_remesh.len(), to_remesh);
+        log::debug!("remesh_modified: remeshing {} chunk(s)", to_remesh.len());
 
         for chunk_pos in to_remesh {
             if let Some(chunk) = self.world.get_chunk_mut(&chunk_pos) {
@@ -313,17 +329,17 @@ impl NaiveRenderer {
             }
             match Self::mesh_chunk(&self.gpu.device, &self.pipeline, &self.world, chunk_pos) {
                 Some(draw) => {
-                    log::debug!("remesh_around: chunk {:?} -> {} indices", chunk_pos, draw.index_count);
+                    log::debug!("remesh_modified: chunk {:?} -> {} indices", chunk_pos, draw.index_count);
                     self.chunk_draws.insert(chunk_pos, draw);
                 }
                 None => {
-                    log::debug!("remesh_around: chunk {:?} -> empty (removed from draws)", chunk_pos);
+                    log::debug!("remesh_modified: chunk {:?} -> empty (removed from draws)", chunk_pos);
                     self.chunk_draws.remove(&chunk_pos);
                 }
             }
         }
 
-        log::info!("remesh_around: done. total draw calls: {}", self.chunk_draws.len());
+        log::info!("remesh_modified: done. total draw calls: {}", self.chunk_draws.len());
     }
 
     // ── Resize ────────────────────────────────────────────────────────────────
