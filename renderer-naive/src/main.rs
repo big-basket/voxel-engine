@@ -55,7 +55,7 @@ impl ApplicationHandler for App {
         if matches!(self, App::Running(_)) { return; }
 
         let window_attrs = Window::default_attributes()
-            .with_title("Voxel Engine — Naive Renderer  |  LMB: dig  RMB: place  Tab: cycle block  Esc: release mouse  [-]/[+]: brush size")
+            .with_title("Voxel Engine — Naive Renderer  |  LMB: dig  RMB: place  Tab: cycle  [-]/[+]: brush  F5: save  Esc: release")
             .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
 
         let window = Arc::new(
@@ -94,7 +94,17 @@ impl ApplicationHandler for App {
         let App::Running(state) = self else { return };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // Auto-save any unsaved edits before exiting.
+                if let App::Running(state) = self {
+                    let dirty = state.renderer.dirty_count();
+                    if dirty > 0 {
+                        log::info!("auto-save on close: {} dirty chunk(s)", dirty);
+                        state.renderer.save();
+                    }
+                }
+                event_loop.exit();
+            }
 
             WindowEvent::KeyboardInput {
                 event: KeyEvent {
@@ -116,8 +126,19 @@ impl ApplicationHandler for App {
                                 release_cursor(&state.renderer.window);
                                 state.mouse_captured = false;
                             } else {
+                                // Save before exit via Escape too.
+                                let dirty = state.renderer.dirty_count();
+                                if dirty > 0 {
+                                    log::info!("auto-save on exit: {} dirty chunk(s)", dirty);
+                                    state.renderer.save();
+                                }
                                 event_loop.exit();
                             }
+                        }
+                        // Manual save with F5
+                        KeyCode::F5 => {
+                            log::info!("F5: manual save");
+                            state.renderer.save();
                         }
                         // Cycle the block type placed by right-click
                         KeyCode::Tab => {

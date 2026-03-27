@@ -14,6 +14,7 @@ use voxel_core::{
     gen::{TerrainParams, generate_chunk},
     gpu::{GpuContext, GpuError, create_uniform_buffer, write_uniform},
     input::{RayHit, place, raycast, remove},
+    persistence::{ChunkStore, StoreError},
     world::{VoxelId, World, CHUNK_SIZE_I, chunk_pos_of},
 };
 
@@ -63,6 +64,9 @@ pub struct NaiveRenderer {
 
     /// Radius of the brush for digging and placing.
     pub brush_radius: u32,
+
+    /// On-disk chunk store — persists edits across sessions.
+    pub store: ChunkStore,
 }
 
 impl NaiveRenderer {
@@ -131,8 +135,22 @@ impl NaiveRenderer {
             &camera_bind_group_layout, Self::DEPTH_FORMAT,
         );
 
+        // Open the chunk store (creates world.db if it doesn't exist).
+        let store = match ChunkStore::open(Self::SAVE_PATH) {
+            Ok(s) => {
+                log::info!("persistence: opened store at '{}'", Self::SAVE_PATH);
+                s
+            }
+            Err(e) => {
+                log::warn!("persistence: could not open store ({e}) — world will not be saved");
+                // Create an in-memory-only fallback by opening a temp file.
+                // This is unusual but keeps the app running even if disk is unavailable.
+                ChunkStore::open(":memory:").expect("in-memory store must succeed")
+            }
+        };
+
         // Build world and initial meshes
-        let world = Self::build_world();
+        let world = Self::build_world(&store);
         let chunk_draws = Self::mesh_all_chunks(&gpu.device, &pipeline, &world);
         log::info!("Generated {} chunk draw calls", chunk_draws.len());
 
@@ -144,23 +162,87 @@ impl NaiveRenderer {
             place_voxel: VoxelId::STONE,
             reach: 50.0,
             brush_radius: 0,
+            store,
         })
     }
 
     // ── World construction ────────────────────────────────────────────────────
 
-    fn build_world() -> World {
+    const SAVE_PATH: &'static str = "world.db";
+
+    /// Opens the chunk store and builds the world, loading saved chunks from
+    /// disk and falling back to procedural generation for any unsaved position.
+    fn build_world(store: &ChunkStore) -> World {
         let params = TerrainParams::default();
         let mut world = World::new();
+
+        let mut loaded_from_disk = 0usize;
+        let mut generated_fresh  = 0usize;
+
         for cy in -2i32..=1 {
             for cz in -2i32..=2 {
                 for cx in -2i32..=2 {
-                    let pos = IVec3::new(cx, cy, cz);
-                    world.insert_chunk(pos, generate_chunk(pos, &params));
+                    let pos = glam::IVec3::new(cx, cy, cz);
+
+                    match store.load_chunk(pos) {
+                        Ok(Some(chunk)) => {
+                            log::debug!("persistence: loaded chunk {:?} from disk", pos);
+                            world.insert_chunk(pos, chunk);
+                            loaded_from_disk += 1;
+                        }
+                        Ok(None) => {
+                            world.insert_chunk(pos, generate_chunk(pos, &params));
+                            generated_fresh += 1;
+                        }
+                        Err(e) => {
+                            log::warn!("persistence: failed to load chunk {:?}: {e} — generating fresh", pos);
+                            world.insert_chunk(pos, generate_chunk(pos, &params));
+                            generated_fresh += 1;
+                        }
+                    }
                 }
             }
         }
+
+        log::info!(
+            "persistence: world ready — {} from disk, {} generated fresh ({} total)",
+            loaded_from_disk, generated_fresh, world.chunks.len(),
+        );
         world
+    }
+
+    // ── Save ──────────────────────────────────────────────────────────────────
+
+    /// Flushes all dirty chunks to disk in a single transaction.
+    /// Called on F5 and on window close.
+    pub fn save(&mut self) {
+        let dirty = self.world.dirty_chunks();
+        if dirty.is_empty() {
+            log::info!("save: nothing to save (no dirty chunks)");
+            return;
+        }
+
+        log::info!("save: flushing {} dirty chunk(s): {:?}", dirty.len(), dirty);
+
+        match self.store.flush_dirty(&mut self.world) {
+            Ok(n) => {
+                let still_dirty = self.world.dirty_chunks().len();
+                log::info!(
+                    "save: wrote {n} chunk(s) to '{}' — {} dirty chunk(s) remaining",
+                    Self::SAVE_PATH,
+                    still_dirty,
+                );
+                if still_dirty > 0 {
+                    log::warn!("save: {} chunk(s) still dirty after flush — possible write failure", still_dirty);
+                }
+            }
+            Err(e) => log::error!("save: flush_dirty failed: {e}"),
+        }
+    }
+
+    /// Returns how many chunks are currently dirty (unsaved).
+    pub fn dirty_count(&self) -> usize {
+        self.world.dirty_chunks().len()
     }
 
     fn mesh_all_chunks(
@@ -324,9 +406,9 @@ impl NaiveRenderer {
         log::debug!("remesh_modified: remeshing {} chunk(s)", to_remesh.len());
 
         for chunk_pos in to_remesh {
-            if let Some(chunk) = self.world.get_chunk_mut(&chunk_pos) {
-                chunk.mark_clean();
-            }
+            // NOTE: do NOT call mark_clean() here. The dirty flag signals the
+            // store that this chunk has unsaved edits. Only flush_dirty() should
+            // clear it, after a successful disk commit.
             match Self::mesh_chunk(&self.gpu.device, &self.pipeline, &self.world, chunk_pos) {
                 Some(draw) => {
                     log::debug!("remesh_modified: chunk {:?} -> {} indices", chunk_pos, draw.index_count);
@@ -339,7 +421,11 @@ impl NaiveRenderer {
             }
         }
 
-        log::info!("remesh_modified: done. total draw calls: {}", self.chunk_draws.len());
+        log::debug!(
+            "remesh_modified: done — {} draw calls, {} dirty chunk(s) pending save",
+            self.chunk_draws.len(),
+            self.world.dirty_chunks().len(),
+        );
     }
 
     // ── Resize ────────────────────────────────────────────────────────────────
