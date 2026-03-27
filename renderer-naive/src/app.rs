@@ -44,9 +44,7 @@ impl ApplicationHandler for App {
 
         let window_attrs = Window::default_attributes()
             .with_title(
-                "Voxel Engine — Naive Renderer  \
-                 |  LMB: dig  RMB: place  Tab: cycle block  \
-                 [-]/[+]: brush size  F5: save  Esc: release cursor"
+                "Voxel Engine — Naive Renderer"
             )
             .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
 
