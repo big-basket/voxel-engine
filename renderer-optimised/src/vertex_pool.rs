@@ -80,12 +80,14 @@ impl SlotRange {
 
     /// Total byte size of this range.
     #[inline]
+    #[allow(dead_code)]
     pub fn byte_size(&self) -> u64 {
         self.count as u64 * SLOT_BYTES
     }
 
     /// Maximum number of quads that fit in this range.
     #[inline]
+    #[allow(dead_code)]
     pub fn quad_capacity(&self) -> usize {
         self.count * QUADS_PER_SLOT
     }
@@ -155,6 +157,7 @@ impl SlotAllocator {
     }
 
     /// How many slots are currently occupied.
+    #[allow(dead_code)]
     pub fn used_count(&self) -> usize {
         self.allocated_count
     }
@@ -170,6 +173,7 @@ pub struct ChunkRecord {
     /// Number of quads actually written (may be < slot_range.quad_capacity()).
     pub quad_count: u32,
     /// Byte offset of this chunk's first quad in the pool buffer.
+    #[allow(dead_code)]
     pub byte_offset: u64,
 }
 
@@ -203,13 +207,14 @@ pub struct VertexPool {
     pub indirect_buffer: wgpu::Buffer,
 
     /// CPU-side slot allocator.
-    allocator: SlotAllocator,
+    pub(crate) allocator: SlotAllocator,
 
     /// Maps chunk position → its pool record.
     chunks: HashMap<IVec3, ChunkRecord>,
 
     /// Bind group for the quad storage buffer (used by the vertex shader).
-    #[allow(dead_code)]
+    /// Created initially with the pool's own bgl; WorldManager replaces it
+    /// with one created from the pipeline's bgl so group indices match.
     pub bind_group: wgpu::BindGroup,
 
     /// Bind group layout (needed when creating the pipeline).
@@ -343,6 +348,7 @@ impl VertexPool {
     // ── Read ──────────────────────────────────────────────────────────────────
 
     /// Returns the record for a chunk, if it is in the pool.
+    #[allow(dead_code)]
     pub fn get_chunk(&self, chunk_pos: &IVec3) -> Option<&ChunkRecord> {
         self.chunks.get(chunk_pos)
     }

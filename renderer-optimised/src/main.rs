@@ -1,10 +1,19 @@
-//! Optimised renderer — entry point.
-//! Vertex pool, indirect draw, and compute culling pipeline.
-//! Build order: vertex_pool (2) → pipeline (3) → indirect (4) → cull shader (5).
+//! Optimised renderer entry point.
+//! Build order: greedy mesher (1) → vertex pool (2) → pipeline/vert.wgsl (3)
+//!              → indirect draw (4) → compute culling (5)
 
+mod app;
+mod pipeline;
+mod renderer;
 mod vertex_pool;
+mod world_manager;
+
+use winit::event_loop::{ControlFlow, EventLoop};
+use app::App;
 
 fn main() {
     env_logger::init();
-    println!("renderer-optimised: not yet implemented — run renderer-naive for now");
+    let event_loop = EventLoop::new().expect("create event loop");
+    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.run_app(&mut App::Uninitialized).expect("run event loop");
 }
