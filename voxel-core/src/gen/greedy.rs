@@ -38,7 +38,7 @@
 /// at chunk boundaries is exact — no seam faces are emitted. When absent,
 /// boundary faces are always emitted (conservative, slightly over-draws).
 
-use crate::world::{Chunk, VoxelId, CHUNK_SIZE};
+use crate::world::{Chunk, CHUNK_SIZE};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -65,6 +65,7 @@ pub const FACE_NEG_Z: usize = 5;
 /// The vertex shader reconstructs the 4 corners from (x,y,z,w,h,face).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GreedyQuad {
     /// Packed position and size.
     pub pos_size: u32,
@@ -134,12 +135,14 @@ pub struct NeighbourData<'a> {
 
 /// A 32×32 occupancy mask for one axis direction.
 /// `mask[y][z]` is a 32-bit word where bit `x` is 1 if voxel (x, y, z) is solid.
+#[allow(dead_code)]
 type OccupancyMask = [[u32; CS]; CS];
 
 /// Builds the occupancy mask from a chunk's voxel bytes.
 /// Optionally extends the mask one step past each face using neighbour data
 /// so that boundary faces are culled accurately.
-fn build_occupancy(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> OccupancyMask {
+#[allow(dead_code)]
+fn build_occupancy(chunk: &Chunk, _neighbours: Option<&NeighbourData<'_>>) -> OccupancyMask {
     let mut mask = [[0u32; CS]; CS];
 
     for y in 0..CS {
@@ -162,6 +165,7 @@ fn build_occupancy(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Occ
 ///
 /// For ±Y and ±Z faces the same principle applies but on different axes.
 
+#[allow(dead_code)]
 fn face_masks_x(mask: &OccupancyMask) -> ([OccupancyMask; 1], [OccupancyMask; 1]) {
     let mut pos = [[[0u32; CS]; CS]];
     let mut neg = [[[0u32; CS]; CS]];
