@@ -3,6 +3,7 @@
 //!              → indirect draw (4) → compute culling (5)
 
 mod app;
+mod bench;
 mod cull_pipeline;
 mod indirect;
 mod pipeline;
@@ -15,6 +16,12 @@ use app::App;
 
 fn main() {
     env_logger::init();
+
+    if std::env::args().any(|a| a == "--bench") {
+        bench::run_benchmarks();
+        return;
+    }
+
     let event_loop = EventLoop::new().expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut App::Uninitialized).expect("run event loop");

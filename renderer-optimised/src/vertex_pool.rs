@@ -54,8 +54,10 @@ pub const QUADS_PER_SLOT: usize = 4096;
 pub const SLOT_BYTES: u64 = (QUADS_PER_SLOT * std::mem::size_of::<GreedyQuad>()) as u64;
 
 /// Maximum number of slots in the pool.
-/// 2048 slots × 32 KiB = 64 MiB — comfortably fits in VRAM on the RX 6800M.
-pub const MAX_SLOTS: usize = 2048;
+/// 8192 slots × 32 KiB = 256 MiB — fits a 17×17×17 world on the RX 6800M.
+/// A 17³ world = 4913 chunks; most are fully underground (6 quads) so average
+/// slot use is well under 1 per chunk. 8192 gives 65% headroom over worst case.
+pub const MAX_SLOTS: usize = 8192;
 
 /// Total pool buffer size in bytes.
 pub const POOL_BYTES: u64 = SLOT_BYTES * MAX_SLOTS as u64;

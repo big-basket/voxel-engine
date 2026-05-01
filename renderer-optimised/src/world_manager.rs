@@ -84,8 +84,8 @@ impl WorldManager {
         let (mut from_disk, mut generated) = (0usize, 0usize);
 
         for cy in -2i32..=1 {
-            for cz in -2i32..=2 {
-                for cx in -2i32..=2 {
+            for cz in -8i32..=8 {
+                for cx in -8i32..=8 {
                     let pos = IVec3::new(cx, cy, cz);
                     match store.load_chunk(pos) {
                         Ok(Some(chunk)) => {
@@ -134,7 +134,16 @@ impl WorldManager {
         }
 
         if self.vertex_pool.upload_chunk(device, queue, pos, &quads).is_none() {
-            log::warn!("vertex pool full — skipping chunk {:?}", pos);
+            log::error!(
+                "vertex pool full — skipping chunk {:?} \
+                 ({} slots used of {}, {} chunks, {} quads total). \
+                 Increase MAX_SLOTS in vertex_pool.rs.",
+                pos,
+                self.vertex_pool.allocator.allocated_count,
+                crate::vertex_pool::MAX_SLOTS,
+                self.vertex_pool.chunk_count(),
+                self.vertex_pool.total_quads(),
+            );
         }
     }
 
