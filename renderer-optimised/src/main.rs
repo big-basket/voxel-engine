@@ -3,6 +3,7 @@
 //!              → indirect draw (4) → compute culling (5)
 
 mod app;
+mod cull_pipeline;
 mod indirect;
 mod pipeline;
 mod renderer;

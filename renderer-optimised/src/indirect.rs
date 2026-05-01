@@ -24,7 +24,9 @@ impl IndirectBuffer {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label:              Some("indirect draw buffer"),
             size:               byte_size,
-            usage:              wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            usage:              wgpu::BufferUsages::INDIRECT
+                              | wgpu::BufferUsages::COPY_DST
+                              | wgpu::BufferUsages::STORAGE, // needed by compute cull pass
             mapped_at_creation: false,
         });
         IndirectBuffer { buffer, draw_count: 0, capacity: max_chunks }
@@ -50,5 +52,21 @@ impl IndirectBuffer {
             .collect();
         queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&args));
         log::debug!("indirect buffer: {} draws", self.draw_count);
+    }
+}
+
+impl IndirectBuffer {
+    /// Resets all active draw entries to instance_count=1 before the cull pass.
+    pub fn reset_instance_counts(&self, queue: &wgpu::Queue) {
+        const INSTANCE_COUNT_OFFSET: u64 = 4; // byte offset within DrawIndirectArgs
+        const ARGS_SIZE: u64 = 16;             // size of DrawIndirectArgs
+        let one: u32 = 1;
+        for i in 0..self.draw_count as u64 {
+            queue.write_buffer(
+                &self.buffer,
+                i * ARGS_SIZE + INSTANCE_COUNT_OFFSET,
+                bytemuck::bytes_of(&one),
+            );
+        }
     }
 }

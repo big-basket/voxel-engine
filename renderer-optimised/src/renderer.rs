@@ -35,8 +35,13 @@ pub struct OptimisedRenderer {
 
     pipeline: OptimisedPipeline,
 
+    /// Compute frustum cull pipeline.
+    cull_pipeline:        crate::cull_pipeline::CullPipeline,
+    cull_camera_bg:       wgpu::BindGroup,
+    cull_origins_bg:      wgpu::BindGroup,
+    cull_indirect_bg:     wgpu::BindGroup,
+
     /// Storage buffer of chunk world-space origins, one vec4 per pool slot.
-    /// Indexed by first_instance / QUADS_PER_SLOT in the vertex shader.
     chunk_origins_buf:        wgpu::Buffer,
     chunk_origins_bind_group: wgpu::BindGroup,
 
@@ -133,11 +138,45 @@ impl OptimisedRenderer {
             }],
         });
 
+        // ── Compute cull pipeline ─────────────────────────────────────────────
+        let cull_pipeline = crate::cull_pipeline::CullPipeline::new(&gpu.device);
+
+        // Reuse the camera buffer for the cull pass.
+        let cull_camera_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("cull camera bg"),
+            layout:  &cull_pipeline.camera_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding:  0,
+                resource: camera_buf.as_entire_binding(),
+            }],
+        });
+
+        // Reuse chunk_origins_buf for the cull pass.
+        let cull_origins_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("cull origins bg"),
+            layout:  &cull_pipeline.origins_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding:  0,
+                resource: chunk_origins_buf.as_entire_binding(),
+            }],
+        });
+
+        // The indirect buffer — cull shader writes instance_count.
+        let cull_indirect_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("cull indirect bg"),
+            layout:  &cull_pipeline.indirect_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding:  0,
+                resource: world.indirect_buffer.buffer.as_entire_binding(),
+            }],
+        });
+
         Ok(OptimisedRenderer {
             window, gpu, surface, config,
             camera_buf, camera_bind_group, camera_bgl,
             depth_texture, depth_view,
             pipeline,
+            cull_pipeline, cull_camera_bg, cull_origins_bg, cull_indirect_bg,
             chunk_origins_buf, chunk_origins_bind_group,
             world,
             uploads_flushed:     false,
@@ -203,6 +242,33 @@ impl OptimisedRenderer {
             &CommandEncoderDescriptor { label: Some("optimised frame") },
         );
 
+        let draw_count = self.world.indirect_buffer.draw_count;
+
+        // ── Compute cull pass ─────────────────────────────────────────────────
+        // Reset instance_count=1 for all active draws, then let the compute
+        // shader zero out any chunks outside the frustum.
+        if draw_count > 0 {
+            // Reset: re-upload the full indirect buffer with instance_count=1.
+            // This is cheaper than a separate reset shader for <2048 draws.
+            self.world.indirect_buffer.reset_instance_counts(&self.gpu.queue);
+
+            // Dispatch the cull shader — one thread per draw entry.
+            {
+                let mut cpass = encoder.begin_compute_pass(
+                    &wgpu::ComputePassDescriptor {
+                        label: Some("frustum cull pass"),
+                        timestamp_writes: None,
+                    }
+                );
+                cpass.set_pipeline(&self.cull_pipeline.pipeline);
+                cpass.set_bind_group(0, &self.cull_camera_bg,   &[]);
+                cpass.set_bind_group(1, &self.cull_origins_bg,  &[]);
+                cpass.set_bind_group(2, &self.cull_indirect_bg, &[]);
+                let groups = crate::cull_pipeline::CullPipeline::dispatch_size(draw_count);
+                cpass.dispatch_workgroups(groups, 1, 1);
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("optimised pass"),
@@ -231,7 +297,6 @@ impl OptimisedRenderer {
             pass.set_bind_group(1, &self.chunk_origins_bind_group, &[]);
             pass.set_bind_group(2, &self.world.vertex_pool.bind_group, &[]);
 
-            let draw_count = self.world.indirect_buffer.draw_count;
             if draw_count > 0 {
                 pass.multi_draw_indirect(
                     &self.world.indirect_buffer.buffer,
@@ -242,7 +307,7 @@ impl OptimisedRenderer {
 
             if !self.logged_draw_summary {
                 log::info!(
-                    "multi_draw_indirect: {} draws in 1 GPU call",
+                    "multi_draw_indirect: {} draws submitted, frustum cull active",
                     draw_count
                 );
                 self.logged_draw_summary = true;
