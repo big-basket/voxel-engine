@@ -21,19 +21,18 @@ struct CameraUniform {
     frustum:   array<vec4<f32>, 6>,
 }
 
-struct ChunkOrigin {
-    // xyz = world-space origin of this chunk, w unused.
-    // One entry per chunk, indexed by instance_index.
-    origin: vec4<f32>,
-}
-
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
 
-// Per-chunk world-space origin — one uniform per draw call.
-// Build order 4 (indirect) will replace this with an instance array.
+// Per-slot chunk origins — storage array with one entry per pool slot.
+// The slot index is derived from quad_base (first_instance) / QUADS_PER_SLOT.
+// This allows multi_draw_indirect with per-chunk correct world positions.
+struct ChunkOrigins {
+    origins: array<vec4<f32>>,
+}
+
 @group(1) @binding(0)
-var<uniform> chunk: ChunkOrigin;
+var<storage, read> chunk_origins: ChunkOrigins;
 
 // The quad storage buffer — shared across all chunks.
 // @group(2) @binding(0) is used by the vertex pool's bind group.
@@ -188,7 +187,10 @@ fn vs_main(
     // Compute corner world offset from anchor + face axes.
     let anchor    = vec3<f32>(ax, ay, az);
     let offset    = quad_corner_offset(face, corner, aw, ah);
-    let world_pos = chunk.origin.xyz + anchor + offset;
+    // Derive slot index from quad_base (first_instance = first_quad).
+    let slot_index = quad_base / 4096u;
+    let world_origin = chunk_origins.origins[slot_index].xyz;
+    let world_pos = world_origin + anchor + offset;
 
     var out: VertexOutput;
     out.clip_pos  = camera.view_proj * vec4<f32>(world_pos, 1.0);

@@ -35,6 +35,11 @@ pub struct OptimisedRenderer {
 
     pipeline: OptimisedPipeline,
 
+    /// Storage buffer of chunk world-space origins, one vec4 per pool slot.
+    /// Indexed by first_instance / QUADS_PER_SLOT in the vertex shader.
+    chunk_origins_buf:        wgpu::Buffer,
+    chunk_origins_bind_group: wgpu::BindGroup,
+
     pub world: WorldManager,
 
     /// True after the first frame flushes pending chunk uploads.
@@ -50,7 +55,7 @@ impl OptimisedRenderer {
     pub fn new(window: Arc<Window>, width: u32, height: u32) -> Result<Self, GpuError> {
         let instance = GpuContext::create_instance();
         let surface  = instance.create_surface(Arc::clone(&window)).expect("create surface");
-        let gpu      = GpuContext::from_surface(instance, &surface, wgpu::Features::empty())?;
+        let gpu      = GpuContext::from_surface(instance, &surface, wgpu::Features::MULTI_DRAW_INDIRECT)?;
         log::info!("GPU: {}", gpu.adapter_info());
 
         let caps = surface.get_capabilities(&gpu.adapter);
@@ -105,12 +110,37 @@ impl OptimisedRenderer {
         let pipeline = OptimisedPipeline::new(&gpu.device, surface_format, &camera_bgl);
         let world    = WorldManager::new(&gpu.device, &pipeline);
 
+        // Chunk origins storage buffer — one vec4 per pool slot.
+        // Pre-populate from the world manager after initial meshing.
+        let origins_size = (crate::vertex_pool::MAX_SLOTS * 4 * 4) as u64; // slots × vec4 × f32
+        let chunk_origins_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label:              Some("chunk origins storage"),
+            size:               origins_size,
+            usage:              wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Build origin data: for each chunk in the pool, write its world-space
+        // origin at slot_index × 16 bytes.
+        Self::upload_origins(&gpu.queue, &chunk_origins_buf, &world);
+
+        let chunk_origins_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("chunk origins bg"),
+            layout:  &pipeline.chunk_origin_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding:  0,
+                resource: chunk_origins_buf.as_entire_binding(),
+            }],
+        });
+
         Ok(OptimisedRenderer {
             window, gpu, surface, config,
             camera_buf, camera_bind_group, camera_bgl,
             depth_texture, depth_view,
-            pipeline, world,
-            uploads_flushed: false,
+            pipeline,
+            chunk_origins_buf, chunk_origins_bind_group,
+            world,
+            uploads_flushed:     false,
             logged_draw_summary: false,
         })
     }
@@ -123,10 +153,12 @@ impl OptimisedRenderer {
 
     pub fn dig(&mut self, hit: &RayHit) {
         self.world.dig(&self.gpu.device, &self.gpu.queue, &self.pipeline, hit);
+        self.refresh_origins();
     }
 
     pub fn place(&mut self, hit: &RayHit) {
         self.world.place(&self.gpu.device, &self.gpu.queue, &self.pipeline, hit);
+        self.refresh_origins();
     }
 
     pub fn cycle_place_voxel(&mut self)  { self.world.cycle_place_voxel(); }
@@ -155,6 +187,7 @@ impl OptimisedRenderer {
             self.world.flush_pending_uploads(
                 &self.gpu.device, &self.gpu.queue, &self.pipeline,
             );
+            Self::upload_origins(&self.gpu.queue, &self.chunk_origins_buf, &self.world);
             self.uploads_flushed = true;
         }
 
@@ -195,24 +228,22 @@ impl OptimisedRenderer {
 
             pass.set_pipeline(&self.pipeline.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.chunk_origins_bind_group, &[]);
             pass.set_bind_group(2, &self.world.vertex_pool.bind_group, &[]);
 
-            let mut drawn = 0u32;
-            let mut skipped_zero = 0u32;
-            for (pos, draw) in self.world.chunk_draws.iter() {
-                if draw.vertex_count == 0 {
-                    skipped_zero += 1;
-                    log::warn!("chunk {:?} has vertex_count=0 — not drawn (upload failed?)", pos);
-                    continue;
-                }
-                pass.set_bind_group(1, &draw.origin_bind_group, &[]);
-                pass.draw(0..draw.vertex_count, draw.first_quad..draw.first_quad + 1);
-                drawn += 1;
+            let draw_count = self.world.indirect_buffer.draw_count;
+            if draw_count > 0 {
+                pass.multi_draw_indirect(
+                    &self.world.indirect_buffer.buffer,
+                    0,
+                    draw_count,
+                );
             }
+
             if !self.logged_draw_summary {
                 log::info!(
-                    "draw summary: {} chunks drawn, {} skipped (vertex_count=0) of {} total",
-                    drawn, skipped_zero, self.world.chunk_draws.len()
+                    "multi_draw_indirect: {} draws in 1 GPU call",
+                    draw_count
                 );
                 self.logged_draw_summary = true;
             }
@@ -223,8 +254,26 @@ impl OptimisedRenderer {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn surface_format(&self) -> wgpu::TextureFormat { self.config.format }
+    /// Uploads all chunk origins into the storage buffer indexed by slot number.
+    fn upload_origins(queue: &wgpu::Queue, buf: &wgpu::Buffer, world: &WorldManager) {
+        // Collect slot→origin mapping from the pool
+        for (pos, record) in world.vertex_pool.chunks.iter() {
+            let slot = record.slot_range.first;
+            let origin: [f32; 4] = [
+                (pos.x * 32) as f32,
+                (pos.y * 32) as f32,
+                (pos.z * 32) as f32,
+                0.0,
+            ];
+            let byte_offset = (slot * 16) as u64; // vec4 = 16 bytes
+            queue.write_buffer(buf, byte_offset, bytemuck::bytes_of(&origin));
+        }
+    }
+
+    /// Called after any remesh to keep chunk_origins_buf in sync.
+    pub fn refresh_origins(&self) {
+        Self::upload_origins(&self.gpu.queue, &self.chunk_origins_buf, &self.world);
+    }
 
     fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32)
         -> (wgpu::Texture, wgpu::TextureView)

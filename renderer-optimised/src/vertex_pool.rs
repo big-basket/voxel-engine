@@ -210,7 +210,7 @@ pub struct VertexPool {
     pub(crate) allocator: SlotAllocator,
 
     /// Maps chunk position → its pool record.
-    chunks: HashMap<IVec3, ChunkRecord>,
+    pub(crate) chunks: HashMap<IVec3, ChunkRecord>,
 
     /// Bind group for the quad storage buffer (used by the vertex shader).
     /// Created initially with the pool's own bgl; WorldManager replaces it
@@ -314,16 +314,15 @@ impl VertexPool {
         let data = bytemuck::cast_slice(quads);
         queue.write_buffer(&self.quad_buffer, byte_offset, data);
 
-        // Write the indirect draw command for the first slot of this chunk.
-        // `first_vertex` is the index of the first *vertex* (not quad):
-        //   first_vertex = slot_first_quad_index × 4
+        // Write the indirect draw command for this chunk.
+        // vertex_count = quads × 6 (two triangles per quad, no index buffer).
+        // first_instance = first_quad so the shader uses it as quad_base.
         let first_quad   = slot_range.first * QUADS_PER_SLOT;
-        let first_vertex = (first_quad * 4) as u32;
         let args = DrawIndirectArgs {
-            vertex_count:   (quads.len() as u32) * 4,
+            vertex_count:   (quads.len() as u32) * 6,
             instance_count: 1,
-            first_vertex,
-            first_instance: slot_range.first as u32, // used as chunk index
+            first_vertex:   0,
+            first_instance: first_quad as u32,
         };
         let args_offset = (slot_range.first * std::mem::size_of::<DrawIndirectArgs>()) as u64;
         queue.write_buffer(&self.indirect_buffer, args_offset, bytemuck::bytes_of(&args));
@@ -351,6 +350,21 @@ impl VertexPool {
     #[allow(dead_code)]
     pub fn get_chunk(&self, chunk_pos: &IVec3) -> Option<&ChunkRecord> {
         self.chunks.get(chunk_pos)
+    }
+
+    /// Returns an iterator of (chunk_pos, DrawIndirectArgs) for all active chunks.
+    /// Used by IndirectBuffer::rebuild to populate the compact draw buffer.
+    pub fn active_draw_args(&self) -> impl Iterator<Item = (IVec3, DrawIndirectArgs)> + '_ {
+        self.chunks.iter().map(|(pos, record)| {
+            let first_quad = record.slot_range.first * QUADS_PER_SLOT;
+            let args = DrawIndirectArgs {
+                vertex_count:   record.quad_count * 6,
+                instance_count: 1,
+                first_vertex:   0,
+                first_instance: first_quad as u32,
+            };
+            (*pos, args)
+        })
     }
 
     /// Returns the total number of quads currently in the pool across all chunks.

@@ -40,19 +40,18 @@ impl OptimisedPipeline {
             source: wgpu::ShaderSource::Wgsl(shader_src.into()),
         });
 
-        // ── Group 1: per-chunk origin uniform ────────────────────────────────
+        // ── Group 1: chunk origins storage array ──────────────────────────────
+        // One vec4<f32> per pool slot — indexed by first_instance/QUADS_PER_SLOT.
         let chunk_origin_bgl =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label:   Some("optimised chunk origin bgl"),
+                label:   Some("optimised chunk origins bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding:    0,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<ChunkOriginUniform>() as u64,
-                        ),
+                        min_binding_size: None,
                     },
                     count: None,
                 }],

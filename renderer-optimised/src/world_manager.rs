@@ -4,40 +4,26 @@
 use std::collections::HashSet;
 
 use glam::IVec3;
-use wgpu::util::DeviceExt;
+
 
 use voxel_core::{
     gen::{TerrainParams, generate_chunk, mesh_chunk},
     persistence::ChunkStore,
-    world::{VoxelId, World, CHUNK_SIZE_I, chunk_pos_of},
+    world::{VoxelId, World, chunk_pos_of},
     camera::Camera,
     input::{RayHit, place, raycast, remove},
 };
 
-use crate::pipeline::{ChunkOriginUniform, OptimisedPipeline};
+use crate::indirect::IndirectBuffer;
+use crate::pipeline::OptimisedPipeline;
 use crate::vertex_pool::VertexPool;
-
-// ── Per-chunk CPU record ──────────────────────────────────────────────────────
-
-/// Everything the renderer needs to issue one draw call for a chunk.
-pub struct ChunkDraw {
-    /// World-space origin uniform buffer (one per chunk for build order 3).
-    /// Build order 4 replaces this with an instance array.
-    #[allow(dead_code)]
-    pub origin_buf:        wgpu::Buffer,
-    pub origin_bind_group: wgpu::BindGroup,
-    /// Number of vertices (quad_count × 4) for the draw call.
-    pub vertex_count:      u32,
-    /// First quad index in the pool — passed as instance_index to the shader.
-    pub first_quad:        u32,
-}
 
 // ── WorldManager ──────────────────────────────────────────────────────────────
 
 pub struct WorldManager {
-    pub world:        World,
-    pub vertex_pool:  VertexPool,
-    pub chunk_draws:  std::collections::HashMap<IVec3, ChunkDraw>,
+    pub world:           World,
+    pub vertex_pool:     VertexPool,
+    pub indirect_buffer: IndirectBuffer,
 
     store:        ChunkStore,
 
@@ -74,17 +60,19 @@ impl WorldManager {
         vertex_pool.bind_group = quad_bg;
 
         let world = Self::load_world(&store);
+        let indirect_buffer = IndirectBuffer::new(device, crate::vertex_pool::MAX_SLOTS as u32);
+
         let mut mgr = WorldManager {
             world,
             vertex_pool,
-            chunk_draws: std::collections::HashMap::new(),
+            indirect_buffer,
             store,
             place_voxel: VoxelId::STONE,
             reach: 50.0,
             brush_radius: 0,
         };
         mgr.mesh_all_chunks(device, pipeline);
-        log::info!("WorldManager: {} chunks meshed", mgr.chunk_draws.len());
+        log::info!("WorldManager: {} chunks in pool", mgr.vertex_pool.chunk_count());
         mgr
     }
 
@@ -124,135 +112,45 @@ impl WorldManager {
 
     // ── Meshing ───────────────────────────────────────────────────────────────
 
-    fn mesh_all_chunks(&mut self, device: &wgpu::Device, pipeline: &OptimisedPipeline) {
-        let positions: Vec<IVec3> = self.world.chunks.keys().copied().collect();
-        // Need a temporary queue-like mechanism: collect quads first, then upload.
-        // We create a dummy queue by using write_buffer through a real queue;
-        // but WorldManager::new is called before the queue exists here.
-        // Solution: accept queue as parameter via mesh_chunk_upload.
-        for pos in positions {
-            // Just build the draw record without uploading yet — upload happens
-            // in the first frame via upload_pending. For now register the origin buf.
-            self.register_chunk_origin(device, pipeline, pos);
-        }
+    fn mesh_all_chunks(&mut self, _device: &wgpu::Device, _pipeline: &OptimisedPipeline) {
+        // No-op in build order 4 — actual upload happens in flush_pending_uploads
+        // once the queue is available. The world is already populated.
     }
 
-    /// Creates the origin uniform buffer and bind group for a chunk,
-    /// and pre-populates the vertex pool with greedy quads.
+    /// Meshes a chunk and uploads its quads into the vertex pool.
     pub fn upload_chunk(
         &mut self,
-        device:   &wgpu::Device,
-        queue:    &wgpu::Queue,
-        pipeline: &OptimisedPipeline,
-        pos:      IVec3,
+        device: &wgpu::Device,
+        queue:  &wgpu::Queue,
+        _pipeline: &OptimisedPipeline,
+        pos:    IVec3,
     ) {
         let Some(chunk) = self.world.get_chunk(&pos) else { return; };
         let quads = mesh_chunk(chunk, None);
 
         if quads.is_empty() {
-            self.chunk_draws.remove(&pos);
             self.vertex_pool.remove_chunk(queue, &pos);
             return;
         }
 
-        let record = match self.vertex_pool.upload_chunk(device, queue, pos, &quads) {
-            Some(r) => r,
-            None    => { log::warn!("vertex pool full — skipping chunk {:?}", pos); return; }
-        };
-
-        let vertex_count = record.quad_count * 6;
-        let first_quad   = (record.slot_range.first * crate::vertex_pool::QUADS_PER_SLOT) as u32;
-
-        let origin = [
-            (pos.x * CHUNK_SIZE_I) as f32,
-            (pos.y * CHUNK_SIZE_I) as f32,
-            (pos.z * CHUNK_SIZE_I) as f32,
-            0.0f32,
-        ];
-        let uniform = ChunkOriginUniform { origin };
-        let origin_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    Some("chunk origin"),
-            contents: bytemuck::bytes_of(&uniform),
-            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let origin_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   Some("chunk origin bg"),
-            layout:  &pipeline.chunk_origin_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding:  0,
-                resource: origin_buf.as_entire_binding(),
-            }],
-        });
-
-        self.chunk_draws.insert(pos, ChunkDraw {
-            origin_buf, origin_bind_group,
-            vertex_count, first_quad,
-        });
+        if self.vertex_pool.upload_chunk(device, queue, pos, &quads).is_none() {
+            log::warn!("vertex pool full — skipping chunk {:?}", pos);
+        }
     }
 
-    /// Creates only the origin buffer (no quad upload) for initial setup.
-    fn register_chunk_origin(
-        &mut self,
-        device:   &wgpu::Device,
-        pipeline: &OptimisedPipeline,
-        pos:      IVec3,
-    ) {
-        let origin = [
-            (pos.x * CHUNK_SIZE_I) as f32,
-            (pos.y * CHUNK_SIZE_I) as f32,
-            (pos.z * CHUNK_SIZE_I) as f32,
-            0.0f32,
-        ];
-        let uniform = ChunkOriginUniform { origin };
-        let origin_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    Some("chunk origin"),
-            contents: bytemuck::bytes_of(&uniform),
-            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let origin_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   Some("chunk origin bg"),
-            layout:  &pipeline.chunk_origin_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding:  0,
-                resource: origin_buf.as_entire_binding(),
-            }],
-        });
-        // vertex_count = 0 until upload_chunk is called
-        self.chunk_draws.insert(pos, ChunkDraw {
-            origin_buf, origin_bind_group,
-            vertex_count: 0, first_quad: 0,
-        });
-    }
-
-    /// Uploads all chunks that haven't been uploaded yet (vertex_count == 0).
-    /// Called once after the queue is available.
+    /// Uploads all world chunks into the vertex pool.
+    /// Called once on the first frame when the queue is available.
     pub fn flush_pending_uploads(
         &mut self,
         device:   &wgpu::Device,
         queue:    &wgpu::Queue,
         pipeline: &OptimisedPipeline,
     ) {
-        let pending: Vec<IVec3> = self.chunk_draws.iter()
-            .filter(|(_, d)| d.vertex_count == 0)
-            .map(|(pos, _)| *pos)
-            .collect();
+        let positions: Vec<IVec3> = self.world.chunks.keys().copied().collect();
+        log::info!("flush_pending_uploads: uploading {} chunks", positions.len());
 
-        log::info!("flush_pending_uploads: uploading {} chunks", pending.len());
-        for pos in pending {
+        for pos in positions {
             self.upload_chunk(device, queue, pipeline, pos);
-        }
-
-        // Report any chunks still at vertex_count=0 after upload attempt.
-        // These indicate upload_chunk returned early (empty mesh or pool full).
-        let still_zero: Vec<IVec3> = self.chunk_draws.iter()
-            .filter(|(_, d)| d.vertex_count == 0)
-            .map(|(pos, _)| *pos)
-            .collect();
-        if !still_zero.is_empty() {
-            log::warn!(
-                "{} chunk(s) still have vertex_count=0 after upload: {:?}",
-                still_zero.len(), still_zero
-            );
         }
 
         log::info!(
@@ -262,6 +160,15 @@ impl WorldManager {
             self.vertex_pool.allocator.allocated_count,
             crate::vertex_pool::MAX_SLOTS,
         );
+
+        self.rebuild_indirect(queue);
+    }
+
+    /// Rebuilds the compact indirect draw buffer from current pool state.
+    pub fn rebuild_indirect(&mut self, queue: &wgpu::Queue) {
+        let entries: Vec<(IVec3, crate::vertex_pool::DrawIndirectArgs)> =
+            self.vertex_pool.active_draw_args().collect();
+        self.indirect_buffer.rebuild(queue, &entries);
     }
 
     // ── Remeshing ─────────────────────────────────────────────────────────────
@@ -291,9 +198,10 @@ impl WorldManager {
         for cp in to_remesh {
             self.upload_chunk(device, queue, pipeline, cp);
         }
+        self.rebuild_indirect(queue);
         log::debug!(
             "remesh: {} draws, {} dirty chunks pending save",
-            self.chunk_draws.len(),
+            self.vertex_pool.chunk_count(),
             self.world.dirty_chunks().len()
         );
     }

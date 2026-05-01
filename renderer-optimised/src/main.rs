@@ -3,6 +3,7 @@
 //!              → indirect draw (4) → compute culling (5)
 
 mod app;
+mod indirect;
 mod pipeline;
 mod renderer;
 mod vertex_pool;
