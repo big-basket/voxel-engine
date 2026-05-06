@@ -245,14 +245,13 @@ impl OptimisedRenderer {
         let draw_count = self.world.indirect_buffer.draw_count;
 
         // ── Compute cull pass ─────────────────────────────────────────────────
-        // Reset instance_count=1 for all active draws, then let the compute
-        // shader zero out any chunks outside the frustum.
-        if draw_count > 0 {
-            // Reset: re-upload the full indirect buffer with instance_count=1.
-            // This is cheaper than a separate reset shader for <2048 draws.
+        // Skip frustum culling when draw_count is small — the compute dispatch
+        // + GPU sync overhead (~120µs baseline) exceeds the rendering savings
+        // for fewer than ~50 chunks. At 100 chunks the break-even is marginal;
+        // at 200+ chunks culling pays for itself by skipping draw calls.
+        const CULL_MIN_DRAWS: u32 = 50;
+        if draw_count >= CULL_MIN_DRAWS {
             self.world.indirect_buffer.reset_instance_counts(&self.gpu.queue);
-
-            // Dispatch the cull shader — one thread per draw entry.
             {
                 let mut cpass = encoder.begin_compute_pass(
                     &wgpu::ComputePassDescriptor {

@@ -1,0 +1,12 @@
+{
+  "renderer": "optimised",
+  "scene_id": "dynamic_remesh",
+  "description": "Dynamic updates — continuous voxel edits, measures remesh latency",
+  "frame_count": 300,
+  "avg_fps": 3724.8418,
+  "one_pct_low_fps": 2346.0007,
+  "avg_frame_ms": 0.2698,
+  "avg_triangle_count": 32660,
+  "avg_draw_calls": 1,
+  "peak_vram_mb": 0.00
+}

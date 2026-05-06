@@ -6,6 +6,7 @@ mod app;
 mod bench;
 mod cull_pipeline;
 mod indirect;
+mod overhead_breakdown;
 mod pipeline;
 mod renderer;
 mod vertex_pool;
@@ -17,8 +18,15 @@ use app::App;
 fn main() {
     env_logger::init();
 
-    if std::env::args().any(|a| a == "--bench") {
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--bench") {
         bench::run_benchmarks();
+        return;
+    }
+
+    if args.iter().any(|a| a == "--overhead") {
+        overhead_breakdown::run_overhead_breakdown();
         return;
     }
 

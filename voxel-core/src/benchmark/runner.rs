@@ -17,7 +17,7 @@
 
 use crate::{
     benchmark::{BenchmarkScene, MetricsCollector, Recorder},
-    benchmark::scenes::all_scenes,
+    benchmark::scenes::BenchmarkConfig,
     camera::{Camera, CameraUniform},
     gpu::{GpuContext, write_uniform},
 };
@@ -76,17 +76,19 @@ pub fn run_all_scenes<R: BenchRenderer>(
     camera_buf: &wgpu::Buffer,
 ) {
     let recorder = Recorder::new(renderer.name(), renderer.results_dir());
-    let scenes   = all_scenes();
+    let config   = BenchmarkConfig::load_or_default(
+        std::path::Path::new("benchmark_config.json")
+    );
 
-    for scene in &scenes {
+    for scene in &config.scenes {
         log::info!(
             "=== {} | Scene: {} ===",
             renderer.name(), scene.id
         );
 
         let mut camera = Camera::new(BENCH_WIDTH as f32 / BENCH_HEIGHT as f32);
-        camera.position = scene.camera_pos;
-        camera.forward  = scene.camera_forward;
+        camera.position = scene.camera_pos();
+        camera.forward  = scene.camera_forward();
 
         let mut scene_data  = renderer.setup_scene(gpu, scene);
         let total_frames    = scene.warmup_frames + scene.measure_frames;

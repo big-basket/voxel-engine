@@ -1,4 +1,4 @@
-use wgpu::{Adapter, Device, DeviceDescriptor, Features, Instance, Limits, Queue};
+use wgpu::{Adapter, Device, DeviceDescriptor, Features, Instance, Queue};
 
 /// The shared wgpu context — everything both renderers need before they can
 /// build pipelines or upload data.

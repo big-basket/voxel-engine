@@ -379,6 +379,11 @@ impl VertexPool {
         self.chunks.len()
     }
 
+    /// Total bytes currently occupied in the pool by active chunks.
+    pub fn allocated_bytes(&self) -> u64 {
+        self.allocator.allocated_count as u64 * crate::vertex_pool::SLOT_BYTES
+    }
+
     /// Number of free slots remaining.
     #[allow(dead_code)]
     pub fn free_slots(&self) -> usize {

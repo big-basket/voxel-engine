@@ -139,7 +139,8 @@ impl BenchRenderer for OptimisedBenchRenderer {
         let draw_count = s.indirect.draw_count;
         let mut encoder = gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("bench opt frame") });
-        if draw_count > 0 {
+        const CULL_MIN_DRAWS: u32 = 50;
+        if draw_count >= CULL_MIN_DRAWS {
             s.indirect.reset_instance_counts(&gpu.queue);
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("bench cull"), timestamp_writes: None });
@@ -175,7 +176,13 @@ impl BenchRenderer for OptimisedBenchRenderer {
             }
         }
         gpu.queue.submit(std::iter::once(encoder.finish()));
-        collector.record_draw(s.total_quads * 6, s.total_quads * 6);
+        // The optimised renderer issues exactly 1 GPU draw call (multi_draw_indirect)
+        // regardless of how many chunks are in the scene. Record that single call
+        // with the total geometry so draw_calls=1 appears in the summary.
+        // record_draw(vertex_count, index_count) → triangles = index_count / 3
+        // total_quads × 6 vertices, total_quads × 6 index_equiv → total_quads × 2 triangles
+        let q = s.total_quads;
+        collector.record_draw(q * 6, q * 6);
     }
 }
 

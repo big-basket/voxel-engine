@@ -1,0 +1,12 @@
+{
+  "renderer": "optimised",
+  "scene_id": "static_high_density",
+  "description": "Static view — high-density scene, long draw distance, peak throughput",
+  "frame_count": 300,
+  "avg_fps": 3630.4380,
+  "one_pct_low_fps": 2483.6699,
+  "avg_frame_ms": 0.2768,
+  "avg_triangle_count": 44654,
+  "avg_draw_calls": 1,
+  "peak_vram_mb": 0.00
+}

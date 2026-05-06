@@ -10,4 +10,4 @@ pub use runner::{
     make_render_target, make_depth_target,
     BENCH_WIDTH, BENCH_HEIGHT, RENDER_FORMAT, DEPTH_FORMAT,
 };
-pub use scenes::{BenchmarkScene, SceneKind};
+pub use scenes::{BenchmarkConfig, BenchmarkScene, SceneKind};
