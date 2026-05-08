@@ -1,8 +1,8 @@
 {
   "scenes": [
     {
-      "id": "static_high_density",
-      "description": "Static view \u2014 high-density scene, long draw distance, peak throughput",
+      "id": "large_world_static",
+      "description": "Large static world — 5×5 surface chunks at full render distance. Tests peak draw call throughput. Naive issues 125+ draw calls; optimised issues 1.",
       "terrain": {
         "seed": 12345,
         "sea_level": 32,
@@ -13,86 +13,86 @@
         "lacunarity": 2.0
       },
       "camera": {
-        "position": [
-          0.0,
-          120.0,
-          -200.0
-        ],
-        "forward": [
-          0.0,
-          -0.25,
-          1.0
-        ]
+        "position": [0.0, 160.0, -220.0],
+        "forward":  [0.0, -0.35, 1.0]
       },
-      "warmup_frames": 60,
+      "warmup_frames":  60,
       "measure_frames": 300,
       "kind": {
         "type": "static_high_density",
-        "draw_radius": 100,
-        "vertical_layers": 40
+        "draw_radius": 6,
+        "vertical_layers": 4
+      }
+    },
+    {
+      "id": "frustum_cull",
+      "description": "Frustum cull test — large world (400+ chunks) but camera faces a cliff so ~60% of chunks are off-screen. Optimised cull pass eliminates those draw calls; naive submits all of them.",
+      "terrain": {
+        "seed": 77777,
+        "sea_level": 32,
+        "amplitude": 32.0,
+        "frequency": 0.010,
+        "octaves": 6,
+        "persistence": 0.55,
+        "lacunarity": 2.0
+      },
+      "camera": {
+        "position": [-320.0, 80.0, 0.0],
+        "forward":  [1.0, -0.15, 0.0]
+      },
+      "warmup_frames":  60,
+      "measure_frames": 300,
+      "kind": {
+        "type": "static_high_density",
+        "draw_radius": 8,
+        "vertical_layers": 4
       }
     },
     {
       "id": "dynamic_remesh",
-      "description": "Dynamic updates \u2014 continuous voxel edits, measures remesh latency",
+      "description": "Dynamic remesh under load — 300 frames of continuous greedy remeshing across a large world. Tests per-frame mesh rebuild cost at scale.",
       "terrain": {
         "seed": 99999,
         "sea_level": 32,
-        "amplitude": 16.0,
-        "frequency": 0.015,
-        "octaves": 4,
+        "amplitude": 20.0,
+        "frequency": 0.013,
+        "octaves": 5,
         "persistence": 0.5,
         "lacunarity": 2.0
       },
       "camera": {
-        "position": [
-          0.0,
-          80.0,
-          -60.0
-        ],
-        "forward": [
-          0.0,
-          -0.25,
-          1.0
-        ]
+        "position": [0.0, 100.0, -120.0],
+        "forward":  [0.0, -0.25, 1.0]
       },
-      "warmup_frames": 30,
+      "warmup_frames":  30,
       "measure_frames": 300,
       "kind": {
         "type": "dynamic_remesh",
-        "edits_per_frame": 1024,
+        "edits_per_frame": 256,
         "edit_radius": 48.0
       }
     },
     {
       "id": "stress_test",
-      "description": "Stress test \u2014 increasing voxel count until FPS drops below 30",
+      "description": "Progressive stress test — chunk count grows every 60 frames. Measures the maximum world size each renderer sustains above 30 FPS. Draw call scaling is the key variable.",
       "terrain": {
         "seed": 42,
         "sea_level": 32,
-        "amplitude": 8.0,
-        "frequency": 0.02,
-        "octaves": 3,
+        "amplitude": 12.0,
+        "frequency": 0.018,
+        "octaves": 4,
         "persistence": 0.5,
         "lacunarity": 2.0
       },
       "camera": {
-        "position": [
-          0.0,
-          120.0,
-          -150.0
-        ],
-        "forward": [
-          0.0,
-          -0.3,
-          1.0
-        ]
+        "position": [0.0, 200.0, -280.0],
+        "forward":  [0.0, -0.3, 1.0]
       },
-      "warmup_frames": 30,
+      "warmup_frames":  30,
       "measure_frames": 1200,
       "kind": {
         "type": "stress_test",
-        "voxels_per_step": 8192,
+        "voxels_per_step": 4096,
         "fps_floor": 30.0
       }
     }

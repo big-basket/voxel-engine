@@ -11,6 +11,7 @@ use winit::{
 };
 
 use voxel_core::{
+    benchmark::BenchmarkConfig,
     camera::{Camera, CameraController, ControllerConfig},
     input::{InputState, Key},
 };
@@ -18,7 +19,8 @@ use voxel_core::{
 use crate::renderer::OptimisedRenderer;
 
 pub enum App {
-    Uninitialized,
+    /// `scene_preview` — if Some, loads the named scene's camera position on startup.
+    Uninitialized { scene_preview: Option<String> },
     Running(RunningState),
 }
 
@@ -33,14 +35,37 @@ pub struct RunningState {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if matches!(self, App::Running(_)) { return; }
+        let scene_preview = match self {
+            App::Running(_) => return,
+            App::Uninitialized { scene_preview } => scene_preview.take(),
+        };
+
+        // Resolve title and initial camera from scene preview if given.
+        let preview_camera = scene_preview.as_deref().and_then(|id| {
+            let config = BenchmarkConfig::load_or_default(
+                std::path::Path::new("benchmark_config.json")
+            );
+            config.scenes.into_iter().find(|s| s.id == id).map(|s| {
+                log::info!("Preview: loading scene '{}'", s.id);
+                log::info!("  {}", s.description);
+                (s.camera_pos(), s.camera_forward())
+            })
+        });
+
+        let title = if let Some(id) = &scene_preview {
+            format!(
+                "Voxel Engine — Optimised Renderer  [preview: {}]  \
+                 LMB: dig  RMB: place  Tab: cycle block  \
+                 [-]/[+]: brush  F5: save  Esc: release cursor", id
+            )
+        } else {
+            "Voxel Engine — Optimised Renderer  \
+             |  LMB: dig  RMB: place  Tab: cycle block  \
+             [-]/[+]: brush  F5: save  Esc: release cursor".into()
+        };
 
         let window_attrs = Window::default_attributes()
-            .with_title(
-                "Voxel Engine — Optimised Renderer  \
-                 |  LMB: dig  RMB: place  Tab: cycle block  \
-                 [-]/[+]: brush  F5: save  Esc: release cursor"
-            )
+            .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
 
         let window = Arc::new(
@@ -58,7 +83,12 @@ impl ApplicationHandler for App {
         };
 
         let mut camera = Camera::new(size.width as f32 / size.height as f32);
-        camera.position = glam::Vec3::new(0.0, 80.0, 0.0);
+        if let Some((pos, fwd)) = preview_camera {
+            camera.position = pos;
+            camera.forward  = fwd;
+        } else {
+            camera.position = glam::Vec3::new(0.0, 80.0, 0.0);
+        }
 
         *self = App::Running(RunningState {
             renderer,

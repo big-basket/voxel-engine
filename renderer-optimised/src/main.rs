@@ -30,7 +30,18 @@ fn main() {
         return;
     }
 
+    // --preview-scene <id>  opens the renderer with the named scene's camera position.
+    // Example: cargo run -p renderer-optimised -- --preview-scene frustum_cull
+    let scene_preview = args.windows(2)
+        .find(|w| w[0] == "--preview-scene")
+        .map(|w| w[1].clone());
+
+    if let Some(ref id) = scene_preview {
+        log::info!("Preview mode: scene '{}'", id);
+    }
+
     let event_loop = EventLoop::new().expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App::Uninitialized).expect("run event loop");
+    event_loop.run_app(&mut App::Uninitialized { scene_preview })
+        .expect("run event loop");
 }
