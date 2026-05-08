@@ -14,7 +14,8 @@
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const CHUNK_SIZE: f32 = 32.0;
-const QUADS_PER_SLOT: u32 = 4096u;
+// MUST match QUADS_PER_SLOT in vertex_pool.rs.
+const QUADS_PER_SLOT: u32 = 2048u;
 
 // ── Uniforms ──────────────────────────────────────────────────────────────────
 

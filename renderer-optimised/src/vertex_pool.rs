@@ -48,7 +48,7 @@ use voxel_core::gen::GreedyQuad;
 
 /// Maximum quads a single slot can hold.
 /// 4096 quads × 8 bytes = 32 KiB per slot — same size as the raw voxel data.
-pub const QUADS_PER_SLOT: usize = 4096;
+pub const QUADS_PER_SLOT: usize = 2048;
 
 /// Byte size of one slot.
 pub const SLOT_BYTES: u64 = (QUADS_PER_SLOT * std::mem::size_of::<GreedyQuad>()) as u64;
@@ -57,7 +57,7 @@ pub const SLOT_BYTES: u64 = (QUADS_PER_SLOT * std::mem::size_of::<GreedyQuad>())
 /// 8192 slots × 32 KiB = 256 MiB — fits a 17×17×17 world on the RX 6800M.
 /// A 17³ world = 4913 chunks; most are fully underground (6 quads) so average
 /// slot use is well under 1 per chunk. 8192 gives 65% headroom over worst case.
-pub const MAX_SLOTS: usize = 8192;
+pub const MAX_SLOTS: usize = 32768;
 
 /// Total pool buffer size in bytes.
 pub const POOL_BYTES: u64 = SLOT_BYTES * MAX_SLOTS as u64;

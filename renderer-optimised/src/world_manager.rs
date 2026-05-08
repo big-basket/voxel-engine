@@ -5,7 +5,6 @@ use std::collections::HashSet;
 
 use glam::IVec3;
 
-
 use voxel_core::{
     gen::{TerrainParams, generate_chunk, mesh_chunk},
     persistence::ChunkStore,
@@ -17,6 +16,27 @@ use voxel_core::{
 use crate::indirect::IndirectBuffer;
 use crate::pipeline::OptimisedPipeline;
 use crate::vertex_pool::VertexPool;
+
+// ── WorldExtent ───────────────────────────────────────────────────────────────
+
+/// Spatial extent of the world to load, derived from the benchmark scene kind.
+pub struct WorldExtent {
+    pub draw_radius:     i32,
+    pub vertical_layers: i32,
+    /// Terrain params from the scene — ensures the interactive preview generates
+    /// the same world as the benchmark, rather than using TerrainParams::default().
+    pub terrain:         TerrainParams,
+}
+
+impl Default for WorldExtent {
+    fn default() -> Self {
+        Self {
+            draw_radius:     8,
+            vertical_layers: 4,
+            terrain:         TerrainParams::default(),
+        }
+    }
+}
 
 // ── WorldManager ──────────────────────────────────────────────────────────────
 
@@ -35,7 +55,7 @@ pub struct WorldManager {
 impl WorldManager {
     const SAVE_PATH: &'static str = "world_optimised.db";
 
-    pub fn new(device: &wgpu::Device, pipeline: &OptimisedPipeline) -> Self {
+    pub fn new(device: &wgpu::Device, pipeline: &OptimisedPipeline, extent: WorldExtent) -> Self {
         let store = match ChunkStore::open(Self::SAVE_PATH) {
             Ok(s)  => { log::info!("persistence: opened '{}'", Self::SAVE_PATH); s }
             Err(e) => {
@@ -46,8 +66,6 @@ impl WorldManager {
 
         let mut vertex_pool = VertexPool::new(device);
 
-        // Temporary: create a quad_storage bind group using the pipeline's bgl.
-        // In build order 4 this moves into the indirect draw path.
         let quad_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label:   Some("quad storage bg"),
             layout:  &pipeline.quad_storage_bgl,
@@ -56,10 +74,9 @@ impl WorldManager {
                 resource: vertex_pool.quad_buffer.as_entire_binding(),
             }],
         });
-        // Store the bind group on the pool for the renderer to access.
         vertex_pool.bind_group = quad_bg;
 
-        let world = Self::load_world(&store);
+        let world = Self::load_world(&store, &extent);
         let indirect_buffer = IndirectBuffer::new(device, crate::vertex_pool::MAX_SLOTS as u32);
 
         let mut mgr = WorldManager {
@@ -78,14 +95,34 @@ impl WorldManager {
 
     // ── World loading ─────────────────────────────────────────────────────────
 
-    fn load_world(store: &ChunkStore) -> World {
-        let params = TerrainParams::default();
+    // ── load_world ────────────────────────────────────────────────────────────────
+
+    fn load_world(store: &ChunkStore, extent: &WorldExtent) -> World {
+        // Use the scene's actual terrain params, not the hardcoded default.
+        let params = &extent.terrain;
         let mut world = World::new();
         let (mut from_disk, mut generated) = (0usize, 0usize);
 
-        for cy in -2i32..=1 {
-            for cz in -8i32..=8 {
-                for cx in -8i32..=8 {
+        let r = extent.draw_radius;
+
+        // Anchor the vertical range so that sea_level always falls inside it.
+        // sea_level is in voxels; convert to chunk Y: sea_chunk = sea_level / 32.
+        // Centre the vertical window on sea_chunk so surface chunks are always loaded.
+        let sea_chunk  = (params.sea_level as i32).div_euclid(32);
+        let half_v     = extent.vertical_layers / 2;
+        let cy_min     = sea_chunk - half_v;
+        let cy_max     = sea_chunk + half_v - 1;
+
+        log::info!(
+            "load_world: draw_radius={} vertical_layers={} sea_chunk={} cy={}..={} → {}×{}×{} = {} chunks",
+            r, extent.vertical_layers, sea_chunk, cy_min, cy_max,
+            r * 2 + 1, extent.vertical_layers, r * 2 + 1,
+            (r * 2 + 1).pow(2) * extent.vertical_layers,
+        );
+
+        for cy in cy_min..=cy_max {
+            for cz in -r..=r {
+                for cx in -r..=r {
                     let pos = IVec3::new(cx, cy, cz);
                     match store.load_chunk(pos) {
                         Ok(Some(chunk)) => {
@@ -94,12 +131,12 @@ impl WorldManager {
                             from_disk += 1;
                         }
                         Ok(None) => {
-                            world.insert_chunk(pos, generate_chunk(pos, &params));
+                            world.insert_chunk(pos, generate_chunk(pos, params));
                             generated += 1;
                         }
                         Err(e) => {
                             log::warn!("persistence: load {:?} failed: {e}", pos);
-                            world.insert_chunk(pos, generate_chunk(pos, &params));
+                            world.insert_chunk(pos, generate_chunk(pos, params));
                             generated += 1;
                         }
                     }
@@ -108,7 +145,8 @@ impl WorldManager {
         }
         log::info!("persistence: {} from disk, {} generated", from_disk, generated);
         world
-    }
+}
+
 
     // ── Meshing ───────────────────────────────────────────────────────────────
 

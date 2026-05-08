@@ -95,6 +95,30 @@
         "voxels_per_step": 4096,
         "fps_floor": 30.0
       }
+    },
+    {
+      "id": "mega_world_stres",
+      "description": "Mega world extreme stress test — 16×16 surface chunks across 8 vertical layers, pushing 2000+ simultaneous draw calls in the naive path. Camera is elevated to maximise visible chunk count and expose worst-case frustum load. Designed to find the absolute ceiling of draw call throughput, chunk streaming, and memory bandwidth.",
+      "terrain": {
+        "seed": 31415,
+        "sea_level": 48,
+        "amplitude": 64.0,
+        "frequency": 0.007,
+        "octaves": 8,
+        "persistence": 0.6,
+        "lacunarity": 2.1
+      },
+      "camera": {
+        "position": [0.0, 512.0, -640.0],
+        "forward":  [0.0, -0.45, 1.0]
+      },
+      "warmup_frames":  120,
+      "measure_frames": 600,
+      "kind": {
+        "type": "static_high_density",
+        "draw_radius": 32,
+        "vertical_layers": 8
+      }
     }
   ]
 }

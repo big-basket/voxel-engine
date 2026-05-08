@@ -12,11 +12,13 @@ use winit::{
 
 use voxel_core::{
     benchmark::BenchmarkConfig,
+    benchmark::scenes::SceneKind,
     camera::{Camera, CameraController, ControllerConfig},
     input::{InputState, Key},
 };
 
 use crate::renderer::OptimisedRenderer;
+use crate::world_manager::WorldExtent;
 
 pub enum App {
     /// `scene_preview` — if Some, loads the named scene's camera position on startup.
@@ -40,17 +42,33 @@ impl ApplicationHandler for App {
             App::Uninitialized { scene_preview } => scene_preview.take(),
         };
 
-        // Resolve title and initial camera from scene preview if given.
-        let preview_camera = scene_preview.as_deref().and_then(|id| {
-            let config = BenchmarkConfig::load_or_default(
-                std::path::Path::new("benchmark_config.json")
-            );
-            config.scenes.into_iter().find(|s| s.id == id).map(|s| {
-                log::info!("Preview: loading scene '{}'", s.id);
-                log::info!("  {}", s.description);
-                (s.camera_pos(), s.camera_forward())
-            })
+        // Load the config once and find the requested scene (if any).
+        // We need both the camera and the extent from the same scene, so we
+        // find it once rather than searching twice.
+        let config = BenchmarkConfig::load_or_default(
+            std::path::Path::new("benchmark_config.json")
+        );
+
+        let found_scene = scene_preview.as_deref().and_then(|id| {
+            config.scenes.into_iter().find(|s| s.id == id)
         });
+
+        let preview_camera = found_scene.as_ref().map(|s| {
+            log::info!("Preview: loading scene '{}'", s.id);
+            log::info!("  {}", s.description);
+            (s.camera_pos(), s.camera_forward())
+        });
+
+        let extent = found_scene
+            .map(|s| {
+                let (draw_radius, vertical_layers) = s.kind.spatial_extent();
+                WorldExtent { draw_radius, vertical_layers, terrain: s.terrain.clone() }
+            })
+            .unwrap_or_default();
+        log::info!(
+            "WorldExtent: draw_radius={} vertical_layers={}",
+            extent.draw_radius, extent.vertical_layers,
+        );
 
         let title = if let Some(id) = &scene_preview {
             format!(
@@ -73,7 +91,7 @@ impl ApplicationHandler for App {
         );
 
         let size = window.inner_size();
-        let renderer = match OptimisedRenderer::new(window, size.width, size.height) {
+        let renderer = match OptimisedRenderer::new(window, size.width, size.height, extent) {
             Ok(r)  => r,
             Err(e) => {
                 eprintln!("Renderer init failed: {e}");
@@ -195,7 +213,7 @@ fn handle_hotkey(key: KeyCode, state: &mut RunningState, event_loop: &ActiveEven
         }
         KeyCode::F5 => { log::info!("F5: save"); state.renderer.save(); }
         KeyCode::Tab => { state.renderer.cycle_place_voxel(); }
-        KeyCode::BracketRight | KeyCode::Equal | KeyCode::NumpadAdd    => { state.renderer.increase_brush(); }
+        KeyCode::BracketRight | KeyCode::Equal | KeyCode::NumpadAdd      => { state.renderer.increase_brush(); }
         KeyCode::BracketLeft  | KeyCode::Minus | KeyCode::NumpadSubtract => { state.renderer.decrease_brush(); }
         _ => {}
     }

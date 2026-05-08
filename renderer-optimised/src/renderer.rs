@@ -16,7 +16,7 @@ use voxel_core::{
 };
 
 use crate::pipeline::OptimisedPipeline;
-use crate::world_manager::WorldManager;
+use crate::world_manager::{WorldExtent, WorldManager};
 
 pub struct OptimisedRenderer {
     pub window: Arc<Window>,
@@ -57,7 +57,12 @@ pub struct OptimisedRenderer {
 impl OptimisedRenderer {
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-    pub fn new(window: Arc<Window>, width: u32, height: u32) -> Result<Self, GpuError> {
+    pub fn new(
+        window: Arc<Window>,
+        width:  u32,
+        height: u32,
+        extent: WorldExtent,
+    ) -> Result<Self, GpuError> {
         let instance = GpuContext::create_instance();
         let surface  = instance.create_surface(Arc::clone(&window)).expect("create surface");
         let gpu      = GpuContext::from_surface(instance, &surface, wgpu::Features::MULTI_DRAW_INDIRECT)?;
@@ -113,11 +118,10 @@ impl OptimisedRenderer {
             Self::create_depth_texture(&gpu.device, width.max(1), height.max(1));
 
         let pipeline = OptimisedPipeline::new(&gpu.device, surface_format, &camera_bgl);
-        let world    = WorldManager::new(&gpu.device, &pipeline);
+        let world    = WorldManager::new(&gpu.device, &pipeline, extent);
 
         // Chunk origins storage buffer — one vec4 per pool slot.
-        // Pre-populate from the world manager after initial meshing.
-        let origins_size = (crate::vertex_pool::MAX_SLOTS * 4 * 4) as u64; // slots × vec4 × f32
+        let origins_size = (crate::vertex_pool::MAX_SLOTS * 4 * 4) as u64;
         let chunk_origins_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label:              Some("chunk origins storage"),
             size:               origins_size,
@@ -125,8 +129,6 @@ impl OptimisedRenderer {
             mapped_at_creation: false,
         });
 
-        // Build origin data: for each chunk in the pool, write its world-space
-        // origin at slot_index × 16 bytes.
         Self::upload_origins(&gpu.queue, &chunk_origins_buf, &world);
 
         let chunk_origins_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -141,7 +143,6 @@ impl OptimisedRenderer {
         // ── Compute cull pipeline ─────────────────────────────────────────────
         let cull_pipeline = crate::cull_pipeline::CullPipeline::new(&gpu.device);
 
-        // Reuse the camera buffer for the cull pass.
         let cull_camera_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label:   Some("cull camera bg"),
             layout:  &cull_pipeline.camera_bgl,
@@ -151,7 +152,6 @@ impl OptimisedRenderer {
             }],
         });
 
-        // Reuse chunk_origins_buf for the cull pass.
         let cull_origins_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label:   Some("cull origins bg"),
             layout:  &cull_pipeline.origins_bgl,
@@ -161,7 +161,6 @@ impl OptimisedRenderer {
             }],
         });
 
-        // The indirect buffer — cull shader writes instance_count.
         let cull_indirect_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label:   Some("cull indirect bg"),
             layout:  &cull_pipeline.indirect_bgl,
@@ -221,7 +220,6 @@ impl OptimisedRenderer {
     // ── Render ────────────────────────────────────────────────────────────────
 
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
-        // On the first frame, flush all pending chunk uploads into the pool.
         if !self.uploads_flushed {
             self.world.flush_pending_uploads(
                 &self.gpu.device, &self.gpu.queue, &self.pipeline,
@@ -244,11 +242,6 @@ impl OptimisedRenderer {
 
         let draw_count = self.world.indirect_buffer.draw_count;
 
-        // ── Compute cull pass ─────────────────────────────────────────────────
-        // Skip frustum culling when draw_count is small — the compute dispatch
-        // + GPU sync overhead (~120µs baseline) exceeds the rendering savings
-        // for fewer than ~50 chunks. At 100 chunks the break-even is marginal;
-        // at 200+ chunks culling pays for itself by skipping draw calls.
         const CULL_MIN_DRAWS: u32 = 50;
         if draw_count >= CULL_MIN_DRAWS {
             self.world.indirect_buffer.reset_instance_counts(&self.gpu.queue);
@@ -287,13 +280,13 @@ impl OptimisedRenderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes:  None,
+                timestamp_writes:    None,
                 occlusion_query_set: None,
             });
 
             pass.set_pipeline(&self.pipeline.pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(1, &self.chunk_origins_bind_group, &[]);
+            pass.set_bind_group(0, &self.camera_bind_group,          &[]);
+            pass.set_bind_group(1, &self.chunk_origins_bind_group,   &[]);
             pass.set_bind_group(2, &self.world.vertex_pool.bind_group, &[]);
 
             if draw_count > 0 {
@@ -320,7 +313,6 @@ impl OptimisedRenderer {
 
     /// Uploads all chunk origins into the storage buffer indexed by slot number.
     fn upload_origins(queue: &wgpu::Queue, buf: &wgpu::Buffer, world: &WorldManager) {
-        // Collect slot→origin mapping from the pool
         for (pos, record) in world.vertex_pool.chunks.iter() {
             let slot = record.slot_range.first;
             let origin: [f32; 4] = [
@@ -329,7 +321,7 @@ impl OptimisedRenderer {
                 (pos.z * 32) as f32,
                 0.0,
             ];
-            let byte_offset = (slot * 16) as u64; // vec4 = 16 bytes
+            let byte_offset = (slot * 16) as u64;
             queue.write_buffer(buf, byte_offset, bytemuck::bytes_of(&origin));
         }
     }

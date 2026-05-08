@@ -15,7 +15,7 @@ pub struct CameraConfig {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SceneKind {
     StaticHighDensity {
-        draw_radius:    i32,
+        draw_radius:     i32,
         vertical_layers: i32,
     },
     DynamicRemesh {
@@ -26,6 +26,19 @@ pub enum SceneKind {
         voxels_per_step: u32,
         fps_floor:       f32,
     },
+}
+
+impl SceneKind {
+    /// Returns `(draw_radius, vertical_layers)` for kinds that carry a spatial
+    /// extent. Returns a sensible default for kinds that do not.
+    pub fn spatial_extent(&self) -> (i32, i32) {
+        match self {
+            SceneKind::StaticHighDensity { draw_radius, vertical_layers } => {
+                (*draw_radius, *vertical_layers)
+            }
+            _ => (8, 4),
+        }
+    }
 }
 
 /// One benchmark scenario — fully serialisable so it can be loaded from JSON.

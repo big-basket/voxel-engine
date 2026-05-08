@@ -26,10 +26,10 @@ impl Camera {
             position: Vec3::new(0.0, 64.0, 0.0),
             forward: Vec3::NEG_Z,
             up: Vec3::Y,
-            fov_y: std::f32::consts::FRAC_PI_4, // 45°
+            fov_y:  std::f32::consts::FRAC_PI_4 * (70.0 / 45.0), // ~70° — better vertical coverage
             aspect,
-            z_near: 0.1,
-            z_far: 1024.0,
+            z_near: 0.01,    // was 0.1 — too large for high-altitude camera, caused top-edge clipping
+            z_far:  8192.0,  // was 1024.0 — too small for draw_radius=32 at Y=512
         }
     }
 

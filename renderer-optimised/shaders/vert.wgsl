@@ -188,7 +188,7 @@ fn vs_main(
     let anchor    = vec3<f32>(ax, ay, az);
     let offset    = quad_corner_offset(face, corner, aw, ah);
     // Derive slot index from quad_base (first_instance = first_quad).
-    let slot_index = quad_base / 4096u;
+    let slot_index = quad_base / 2048u;
     let world_origin = chunk_origins.origins[slot_index].xyz;
     let world_pos = world_origin + anchor + offset;
 

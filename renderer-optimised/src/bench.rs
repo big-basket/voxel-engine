@@ -7,6 +7,7 @@ use voxel_core::{
         BenchRenderer, BenchmarkScene, MetricsCollector,
         RENDER_FORMAT, DEPTH_FORMAT,
         make_render_target, make_depth_target, run_all_scenes,
+        scenes::SceneKind,
     },
     camera::CameraUniform,
     gen::{generate_chunk, mesh_chunk},
@@ -82,9 +83,29 @@ impl BenchRenderer for OptimisedBenchRenderer {
     fn results_dir(&self) -> &str { "results_optimised" }
 
     fn setup_scene(&mut self, gpu: &GpuContext, scene: &BenchmarkScene) -> OptimisedScene {
-        let x_range = -2i32..=2;
-        let y_range = -2i32..=1;
-        let z_range = -2i32..=2;
+        // Derive chunk ranges from the scene kind instead of hardcoding them.
+        let (draw_radius, vertical_layers) = match scene.kind {
+            SceneKind::StaticHighDensity { draw_radius, vertical_layers } => {
+                (draw_radius, vertical_layers)
+            }
+            // DynamicRemesh and StressTest have no spatial extent in the config;
+            // fall back to a sensible default.
+            _ => (8, 4),
+        };
+        let half_v  = vertical_layers / 2;
+        let x_range = -draw_radius..=draw_radius;
+        let y_range = -half_v..=(half_v - 1);
+        let z_range = -draw_radius..=draw_radius;
+
+        log::info!(
+            "setup_scene '{}': draw_radius={} vertical_layers={} \
+             → {}×{}×{} = {} chunks (before culling)",
+            scene.id,
+            draw_radius, vertical_layers,
+            draw_radius * 2 + 1, vertical_layers, draw_radius * 2 + 1,
+            (draw_radius * 2 + 1).pow(2) * vertical_layers,
+        );
+
         let mut world = World::new();
         for cy in y_range.clone() { for cz in z_range.clone() { for cx in x_range.clone() {
             let pos = IVec3::new(cx, cy, cz);
