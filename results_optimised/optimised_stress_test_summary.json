@@ -1,12 +1,12 @@
 {
   "renderer": "optimised",
   "scene_id": "stress_test",
-  "description": "Stress test — increasing voxel count until FPS drops below 30",
+  "description": "Progressive stress test — chunk count grows every 60 frames. Measures the maximum world size each renderer sustains above 30 FPS. Draw call scaling is the key variable.",
   "frame_count": 1200,
-  "avg_fps": 3861.4793,
-  "one_pct_low_fps": 2948.1733,
-  "avg_frame_ms": 0.2597,
-  "avg_triangle_count": 21112,
+  "avg_fps": 3966.7857,
+  "one_pct_low_fps": 2433.5183,
+  "avg_frame_ms": 0.2534,
+  "avg_triangle_count": 352650,
   "avg_draw_calls": 1,
   "peak_vram_mb": 0.00
 }

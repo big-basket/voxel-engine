@@ -9,7 +9,7 @@ use winit::{
 };
 
 use voxel_core::{
-    benchmark::BenchmarkConfig,
+    benchmark::{BenchmarkConfig, scenes::SceneKind},
     camera::{Camera, CameraController, ControllerConfig},
     input::{InputState, Key},
 };
@@ -21,6 +21,7 @@ mod renderer;
 mod world_manager;
 
 use renderer::NaiveRenderer;
+use world_manager::WorldExtent;
 
 fn main() {
     env_logger::init();
@@ -32,15 +33,11 @@ fn main() {
         return;
     }
 
-    // --preview-scene <id>  opens the renderer positioned at the named scene's camera.
-    // Lists available scenes if the id is not found.
-    // Example: cargo run -p renderer-naive -- --preview-scene frustum_cull
     let scene_preview = args.windows(2)
         .find(|w| w[0] == "--preview-scene")
         .map(|w| w[1].clone());
 
     if let Some(ref id) = scene_preview {
-        // Validate the scene ID exists and print its description.
         let config = BenchmarkConfig::load_or_default(
             std::path::Path::new("benchmark_config.json")
         );
@@ -83,15 +80,32 @@ impl ApplicationHandler for App {
             App::Uninitialized { scene_preview } => scene_preview.take(),
         };
 
-        // Resolve initial camera from scene preview if given.
-        let preview_camera = scene_preview.as_deref().and_then(|id| {
-            let config = BenchmarkConfig::load_or_default(
-                std::path::Path::new("benchmark_config.json")
-            );
-            config.scenes.into_iter().find(|s| s.id == id).map(|s| {
-                (s.camera_pos(), s.camera_forward())
-            })
+        // Load config once — extract camera, extent, and terrain together.
+        let config = BenchmarkConfig::load_or_default(
+            std::path::Path::new("benchmark_config.json")
+        );
+
+        let found_scene = scene_preview.as_deref().and_then(|id| {
+            config.scenes.into_iter().find(|s| s.id == id)
         });
+
+        let preview_camera = found_scene.as_ref().map(|s| {
+            log::info!("Preview: loading scene '{}'", s.id);
+            log::info!("  {}", s.description);
+            (s.camera_pos(), s.camera_forward())
+        });
+
+        let extent = found_scene
+            .map(|s| {
+                let (draw_radius, vertical_layers) = s.kind.spatial_extent();
+                WorldExtent { draw_radius, vertical_layers, terrain: s.terrain.clone() }
+            })
+            .unwrap_or_default();
+
+        log::info!(
+            "WorldExtent: draw_radius={} vertical_layers={}",
+            extent.draw_radius, extent.vertical_layers,
+        );
 
         let title = if let Some(ref id) = scene_preview {
             format!(
@@ -114,7 +128,7 @@ impl ApplicationHandler for App {
         );
 
         let size = window.inner_size();
-        let renderer = match NaiveRenderer::new(window, size.width, size.height) {
+        let renderer = match NaiveRenderer::new(window, size.width, size.height, extent) {
             Ok(r)  => r,
             Err(e) => {
                 eprintln!("Renderer init failed: {e}");
@@ -142,80 +156,39 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
+        &mut self, event_loop: &ActiveEventLoop,
+        _window_id: WindowId, event: WindowEvent,
     ) {
         let App::Running(state) = self else { return };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-
+            WindowEvent::CloseRequested => {
+                auto_save_if_dirty(state, "close");
+                event_loop.exit();
+            }
             WindowEvent::KeyboardInput {
                 event: KeyEvent {
                     physical_key: PhysicalKey::Code(key_code),
-                    state: element_state,
-                    ..
-                },
-                ..
+                    state: element_state, ..
+                }, ..
             } => {
                 let pressed = element_state == ElementState::Pressed;
                 if let Some(key) = map_key(key_code) {
                     if pressed { state.input.press(key); }
                     else       { state.input.release(key); }
                 }
-                if pressed && key_code == KeyCode::Escape {
-                    if state.mouse_captured {
-                        release_cursor(&state.renderer.window);
-                        state.mouse_captured = false;
-                    } else {
-                        event_loop.exit();
-                    }
+                if pressed { handle_hotkey(key_code, state, event_loop); }
+            }
+            WindowEvent::MouseInput { state: btn_state, button, .. } => {
+                if btn_state == ElementState::Pressed {
+                    handle_mouse_button(button, state);
                 }
             }
-
-            WindowEvent::MouseInput {
-                state: element_state,
-                button: winit::event::MouseButton::Left,
-                ..
-            } => {
-                if element_state == ElementState::Pressed && !state.mouse_captured {
-                    capture_cursor(&state.renderer.window);
-                    state.mouse_captured = true;
-                }
+            WindowEvent::Resized(sz) => {
+                state.renderer.resize(sz.width, sz.height);
+                state.camera.set_aspect(sz.width, sz.height);
             }
-
-            WindowEvent::Resized(new_size) => {
-                state.renderer.resize(new_size.width, new_size.height);
-                state.camera.set_aspect(new_size.width, new_size.height);
-            }
-
-            WindowEvent::RedrawRequested => {
-                let now = std::time::Instant::now();
-                let dt  = now.duration_since(state.last_frame).as_secs_f32();
-                state.last_frame = now;
-
-                let axes     = state.input.movement_axes();
-                let sprinting = state.input.sprinting();
-                state.controller.apply_movement(&mut state.camera, axes, dt, sprinting);
-                state.controller.update_camera_look(&mut state.camera);
-
-                match state.renderer.render(&state.camera) {
-                    Ok(()) => {}
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        let s = state.renderer.window.inner_size();
-                        state.renderer.resize(s.width, s.height);
-                    }
-                    Err(wgpu::SurfaceError::OutOfMemory) => {
-                        eprintln!("Out of GPU memory");
-                        event_loop.exit();
-                    }
-                    Err(e) => eprintln!("Surface error: {e}"),
-                }
-                state.renderer.window.request_redraw();
-            }
-
+            WindowEvent::RedrawRequested => { tick(state, event_loop); }
             _ => {}
         }
     }
@@ -238,6 +211,75 @@ impl ApplicationHandler for App {
             state.renderer.window.request_redraw();
         }
     }
+}
+
+fn tick(state: &mut RunningState, event_loop: &ActiveEventLoop) {
+    let now = std::time::Instant::now();
+    let dt  = now.duration_since(state.last_frame).as_secs_f32();
+    state.last_frame = now;
+
+    let axes = state.input.movement_axes();
+    state.controller.apply_movement(&mut state.camera, axes, dt, state.input.sprinting());
+    state.controller.update_camera_look(&mut state.camera);
+
+    match state.renderer.render(&state.camera) {
+        Ok(()) => {}
+        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            let sz = state.renderer.window.inner_size();
+            state.renderer.resize(sz.width, sz.height);
+        }
+        Err(wgpu::SurfaceError::OutOfMemory) => {
+            eprintln!("Out of GPU memory");
+            event_loop.exit();
+        }
+        Err(e) => eprintln!("Surface error: {e}"),
+    }
+    state.renderer.window.request_redraw();
+}
+
+fn handle_hotkey(key: KeyCode, state: &mut RunningState, event_loop: &ActiveEventLoop) {
+    match key {
+        KeyCode::Escape => {
+            if state.mouse_captured {
+                release_cursor(&state.renderer.window);
+                state.mouse_captured = false;
+            } else {
+                auto_save_if_dirty(state, "Escape");
+                event_loop.exit();
+            }
+        }
+        KeyCode::F5  => { state.renderer.save(); }
+        KeyCode::Tab => { state.renderer.cycle_place_voxel(); }
+        KeyCode::BracketRight | KeyCode::Equal | KeyCode::NumpadAdd      => { state.renderer.increase_brush(); }
+        KeyCode::BracketLeft  | KeyCode::Minus | KeyCode::NumpadSubtract => { state.renderer.decrease_brush(); }
+        _ => {}
+    }
+}
+
+fn handle_mouse_button(button: winit::event::MouseButton, state: &mut RunningState) {
+    match button {
+        winit::event::MouseButton::Left => {
+            if !state.mouse_captured {
+                capture_cursor(&state.renderer.window);
+                state.mouse_captured = true;
+            } else if let Some(hit) = state.renderer.raycast(&state.camera) {
+                state.renderer.dig(&hit);
+            }
+        }
+        winit::event::MouseButton::Right => {
+            if state.mouse_captured {
+                if let Some(hit) = state.renderer.raycast(&state.camera) {
+                    state.renderer.place(&hit);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn auto_save_if_dirty(state: &mut RunningState, trigger: &str) {
+    let n = state.renderer.dirty_count();
+    if n > 0 { log::info!("auto-save on {trigger}: {n} chunk(s)"); state.renderer.save(); }
 }
 
 fn capture_cursor(window: &Window) {

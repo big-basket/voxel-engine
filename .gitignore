@@ -22,3 +22,7 @@ world.db
 world_optimised.db
 
 results_optimised/
+results_optimised/optimised_dynamic_remesh_frames.csv
+results_optimised/optimised_dynamic_remesh_summary.json
+results_optimised/optimised_stress_test_frames.csv
+results_optimised/optimised_stress_test_summary.json

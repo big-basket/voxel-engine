@@ -15,7 +15,7 @@ use voxel_core::{
 };
 
 use crate::pipeline::NaivePipeline;
-use crate::world_manager::WorldManager;
+use crate::world_manager::{WorldExtent, WorldManager};
 
 pub struct NaiveRenderer {
     /// Window must be declared first — surface borrows from it.
@@ -42,7 +42,7 @@ pub struct NaiveRenderer {
 impl NaiveRenderer {
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-    pub fn new(window: Arc<Window>, width: u32, height: u32) -> Result<Self, GpuError> {
+    pub fn new(window: Arc<Window>, width: u32, height: u32, extent: WorldExtent) -> Result<Self, GpuError> {
         let instance = GpuContext::create_instance();
         let surface = instance
             .create_surface(Arc::clone(&window))
@@ -105,7 +105,7 @@ impl NaiveRenderer {
             &camera_bind_group_layout, Self::DEPTH_FORMAT,
         );
 
-        let world = WorldManager::new(&gpu.device, &pipeline);
+        let world = WorldManager::new(&gpu.device, &pipeline, extent);
 
         Ok(NaiveRenderer {
             window, gpu, surface, config,

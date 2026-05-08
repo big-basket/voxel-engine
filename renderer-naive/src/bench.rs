@@ -12,10 +12,11 @@ use voxel_core::{
         BenchRenderer, BenchmarkScene, MetricsCollector,
         RENDER_FORMAT, DEPTH_FORMAT,
         make_render_target, make_depth_target, run_all_scenes,
+        scenes::SceneKind,
     },
     camera::{Camera, CameraUniform},
-    gen::{generate_chunk},
-    gpu::{GpuContext, GpuError, write_uniform},
+    gen::generate_chunk,
+    gpu::{GpuContext, GpuError},
     world::{World, CHUNK_SIZE_I},
 };
 use glam::IVec3;
@@ -26,10 +27,9 @@ use crate::pipeline::{ChunkUniform, NaivePipeline};
 // ── Per-scene GPU state ───────────────────────────────────────────────────────
 
 pub struct NaiveScene {
-    draws:      Vec<ChunkDrawCall>,
+    draws:       Vec<ChunkDrawCall>,
     render_view: wgpu::TextureView,
     depth_view:  wgpu::TextureView,
-    camera_bg:   wgpu::BindGroup,
 }
 
 struct ChunkDrawCall {
@@ -77,15 +77,34 @@ impl BenchRenderer for NaiveBenchRenderer {
     fn name(&self)        -> &str { "naive" }
     fn results_dir(&self) -> &str { "results" }
 
-    fn setup_scene(
-        &mut self,
-        gpu:   &GpuContext,
-        scene: &BenchmarkScene,
-    ) -> NaiveScene {
-        let x_range = -2i32..=2;
-        let y_range = -2i32..=1;
-        let z_range = -2i32..=2;
+    fn setup_scene(&mut self, gpu: &GpuContext, scene: &BenchmarkScene) -> NaiveScene {
+        // Derive chunk ranges from the scene kind, matching world_manager.rs logic.
+        let (draw_radius, vertical_layers) = match scene.kind {
+            SceneKind::StaticHighDensity { draw_radius, vertical_layers } => {
+                (draw_radius, vertical_layers)
+            }
+            _ => (8, 4),
+        };
 
+        // Anchor vertical range on sea_level so surface chunks are always loaded.
+        let sea_chunk = (scene.terrain.sea_level as i32).div_euclid(32);
+        let half_v    = vertical_layers / 2;
+        let cy_min    = sea_chunk - half_v;
+        let cy_max    = sea_chunk + half_v - 1;
+
+        let x_range = -draw_radius..=draw_radius;
+        let y_range = cy_min..=cy_max;
+        let z_range = -draw_radius..=draw_radius;
+
+        log::info!(
+            "setup_scene '{}': draw_radius={} vertical_layers={} cy={}..={} \
+             → {}×{}×{} = {} chunks",
+            scene.id, draw_radius, vertical_layers, cy_min, cy_max,
+            draw_radius * 2 + 1, vertical_layers, draw_radius * 2 + 1,
+            (draw_radius * 2 + 1).pow(2) * vertical_layers,
+        );
+
+        // Generate world using the scene's actual terrain params.
         let mut world = World::new();
         for cy in y_range.clone() {
             for cz in z_range.clone() {
@@ -96,6 +115,7 @@ impl BenchRenderer for NaiveBenchRenderer {
             }
         }
 
+        // Build GPU draw calls for every non-empty chunk.
         let mut draws = Vec::new();
         for cy in y_range {
             for cz in z_range.clone() {
@@ -151,36 +171,23 @@ impl BenchRenderer for NaiveBenchRenderer {
             }
         }
 
+        log::info!("setup_scene '{}': {} non-empty draw calls", scene.id, draws.len());
+
         let (_rt, render_view) = make_render_target(&gpu.device);
         let (_dt, depth_view)  = make_depth_target(&gpu.device);
 
-        // Per-scene camera bind group (camera_buf passed each frame)
-        let camera_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   Some("bench naive camera bg"),
-            layout:  &self.camera_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding:  0,
-                resource: gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                    label:              Some("bench cam placeholder"),
-                    size:               CameraUniform::SIZE,
-                    usage:              wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }).as_entire_binding(),
-            }],
-        });
-
-        NaiveScene { draws, render_view, depth_view, camera_bg }
+        NaiveScene { draws, render_view, depth_view }
     }
 
     fn render_frame(
         &mut self,
         gpu:        &GpuContext,
         scene_data: &mut NaiveScene,
-        camera:     &Camera,
+        _camera:    &Camera,
         camera_buf: &wgpu::Buffer,
         collector:  &mut MetricsCollector,
     ) {
-        // Rebuild camera bind group pointing at the shared camera_buf
+        // Rebuild camera bind group pointing at the shared camera_buf each frame.
         let camera_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label:   Some("bench naive camera bg frame"),
             layout:  &self.camera_bgl,
