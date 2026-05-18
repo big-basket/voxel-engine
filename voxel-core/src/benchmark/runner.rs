@@ -1,19 +1,4 @@
-/// Unified benchmark runner — shared frame loop, scene iteration, and result
-/// writing for both the naive and optimised renderers.
-///
-/// # Architecture
-///
-/// voxel-core cannot depend on either renderer crate (that would be a
-/// circular dependency). Instead, callers implement `BenchRenderer` and pass
-/// it into `run_all_scenes`. The trait is defined here and contains only the
-/// wgpu operations that are identical between both renderers — uploading the
-/// camera uniform, building a command encoder, dispatching work, and polling.
-///
-/// Renderer-specific setup (pipeline creation, mesh upload, indirect buffers)
-/// lives in `renderer-naive/src/bench.rs` and
-/// `renderer-optimised/src/bench.rs` respectively. Those files are now thin
-/// shims: they implement `BenchRenderer`, call `run_all_scenes`, and handle
-/// nothing else.
+/// Unified benchmark runner 
 
 use crate::{
     benchmark::{BenchmarkScene, MetricsCollector, Recorder},
@@ -22,37 +7,20 @@ use crate::{
     gpu::{GpuContext, write_uniform},
 };
 
-// ── Trait ─────────────────────────────────────────────────────────────────────
 
-/// A renderer that can be benchmarked headlessly.
-///
-/// Implementations provide:
-/// - One-time scene setup (`setup_scene`) — uploads geometry, allocates GPU
-///   buffers, returns an opaque handle the frame loop passes back.
-/// - Per-frame work (`render_frame`) — dispatches GPU commands and records
-///   the metrics for that frame.
 pub trait BenchRenderer {
-    /// Opaque per-scene state (mesh buffers, pipeline bind groups, etc.).
     type Scene: Send;
 
-    /// Name shown in log output and written to result filenames.
     fn name(&self) -> &str;
 
-    /// Directory results are written to.
     fn results_dir(&self) -> &str;
 
-    /// Builds GPU resources for one benchmark scene.
-    /// Called once per scene, before the frame loop.
     fn setup_scene(
         &mut self,
         gpu:   &GpuContext,
         scene: &BenchmarkScene,
     ) -> Self::Scene;
 
-    /// Renders one frame into the off-screen target.
-    /// `collector` is live — call `record_draw` inside with the geometry counts.
-    /// The frame timing is handled by `run_all_scenes`; do not call
-    /// `begin_frame` / `end_frame` here.
     fn render_frame(
         &mut self,
         gpu:        &GpuContext,
@@ -63,13 +31,11 @@ pub trait BenchRenderer {
     );
 }
 
-// ── Shared loop ───────────────────────────────────────────────────────────────
 
 pub const BENCH_WIDTH:  u32 = 1280;
 pub const BENCH_HEIGHT: u32 = 720;
 
-/// Runs all three canonical benchmark scenes through `renderer`, writes
-/// per-frame CSVs and summary JSONs to `renderer.results_dir()`.
+
 pub fn run_all_scenes<R: BenchRenderer>(
     renderer: &mut R,
     gpu:      &GpuContext,
@@ -97,8 +63,7 @@ pub fn run_all_scenes<R: BenchRenderer>(
         for frame_idx in 0..total_frames {
             let measuring = frame_idx >= scene.warmup_frames;
 
-            // Upload camera uniform before every frame so the GPU sees the
-            // correct view-projection matrix.
+
             write_uniform(
                 &gpu.queue,
                 camera_buf,
@@ -115,8 +80,7 @@ pub fn run_all_scenes<R: BenchRenderer>(
                 &mut collector,
             );
 
-            // Block until the GPU has finished so frame time is wall-clock
-            // accurate. Both renderers use this same synchronisation point.
+
             gpu.device.poll(wgpu::Maintain::Wait);
 
             if measuring { collector.end_frame(0); }
@@ -151,7 +115,6 @@ pub fn run_all_scenes<R: BenchRenderer>(
     );
 }
 
-// ── Shared GPU target helpers ─────────────────────────────────────────────────
 
 pub const RENDER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 pub const DEPTH_FORMAT:  wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;

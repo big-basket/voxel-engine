@@ -1,12 +1,8 @@
-/// Returns the minimum buffer size aligned to wgpu's `COPY_BUFFER_ALIGNMENT`
-/// (256 bytes). Uniform buffers must be a multiple of this size.
 pub fn aligned_size(size: u64) -> u64 {
     let align = wgpu::COPY_BUFFER_ALIGNMENT;
     (size + align - 1) & !(align - 1)
 }
 
-/// Creates a wgpu buffer sized and labelled for a uniform struct `T`.
-/// The buffer is `UNIFORM | COPY_DST` so `queue.write_buffer` works on it.
 pub fn create_uniform_buffer<T: bytemuck::Pod>(
     device: &wgpu::Device,
     label: &str,
@@ -19,7 +15,6 @@ pub fn create_uniform_buffer<T: bytemuck::Pod>(
     })
 }
 
-/// Writes a `bytemuck::Pod` value into a uniform buffer.
 pub fn write_uniform<T: bytemuck::Pod>(
     queue: &wgpu::Queue,
     buffer: &wgpu::Buffer,

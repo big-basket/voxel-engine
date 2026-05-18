@@ -4,27 +4,17 @@ use redb::{Database, DatabaseError, ReadableTable, ReadableTableMetadata, TableD
 
 use crate::world::chunk::Chunk;
 
-/// redb table: chunk key → raw voxel bytes.
-///
-/// Key:   (i32, i32, i32) — chunk-space position (x, y, z).
-/// Value: [u8; CHUNK_VOLUME] — raw voxel data, no compression.
-///
-/// Delta compression (only storing modified regions) is handled in delta.rs.
-/// store.rs only deals with full-chunk reads and writes.
 const CHUNKS: TableDefinition<(i32, i32, i32), &[u8]> =
     TableDefinition::new("chunks");
 
-/// Handle to the on-disk chunk store.
 pub struct ChunkStore {
     db: Database,
 }
 
 impl ChunkStore {
-    /// Opens (or creates) the chunk database at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let db = Database::create(path)?;
 
-        // Ensure the table exists so reads never fail on a fresh database.
         let write_txn = db.begin_write()?;
         {
             write_txn.open_table(CHUNKS)?;
@@ -34,9 +24,7 @@ impl ChunkStore {
         Ok(ChunkStore { db })
     }
 
-    // ── Write ────────────────────────────────────────────────────────────────
 
-    /// Saves a single chunk to disk and marks it clean.
     pub fn save_chunk(
         &self,
         pos: glam::IVec3,
@@ -53,8 +41,6 @@ impl ChunkStore {
         Ok(())
     }
 
-    /// Saves all dirty chunks from a world in a single transaction.
-    /// More efficient than calling `save_chunk` in a loop.
     pub fn flush_dirty(
         &self,
         world: &mut crate::world::world::World,
@@ -85,9 +71,7 @@ impl ChunkStore {
         Ok(dirty_positions.len())
     }
 
-    // ── Read ─────────────────────────────────────────────────────────────────
 
-    /// Loads a single chunk from disk. Returns `None` if not found.
     pub fn load_chunk(&self, pos: glam::IVec3) -> Result<Option<Chunk>, StoreError> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(CHUNKS)?;
@@ -104,7 +88,6 @@ impl ChunkStore {
         }
     }
 
-    /// Returns the chunk-space positions of all chunks stored on disk.
     pub fn stored_positions(&self) -> Result<Vec<glam::IVec3>, StoreError> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(CHUNKS)?;
@@ -126,7 +109,6 @@ impl ChunkStore {
     }
 }
 
-// ── Error type ───────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum StoreError {

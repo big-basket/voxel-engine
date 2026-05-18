@@ -1,17 +1,8 @@
-/// Overhead breakdown benchmark.
-///
-/// Measures each renderer stage independently to identify where the
-/// optimised renderer loses to the naive one at low chunk counts, and
-/// find the crossover point where it wins.
-///
-/// Stages measured:
-///   naive:     camera write | draw loop (N × draw_indexed) | submit
-///   optimised: camera write | indirect reset | cull dispatch | multi_draw | submit
-///
-/// Run with: cargo run --release -p renderer-optimised -- --overhead
+/// Overhead breakdown benchmark
 
 use glam::IVec3;
 use std::time::{Duration, Instant};
+use std::io::Write;
 
 use voxel_core::{
     camera::{Camera, CameraUniform},
@@ -28,8 +19,7 @@ use crate::vertex_pool::{DrawIndirectArgs, VertexPool, MAX_SLOTS};
 
 const WARMUP: u32  = 50;
 const FRAMES: u32  = 200;
-// Chunk counts to test — sweeps from tiny to large to find the crossover point
-const COUNTS: &[i32] = &[1, 2, 4, 8, 16, 32, 64, 100, 200, 400];
+const COUNTS: &[i32] = &[1, 4, 9, 16, 36, 64, 100, 225, 400];
 
 pub fn run_overhead_breakdown() {
     log::info!("=== Overhead breakdown benchmark ===");
@@ -40,6 +30,7 @@ pub fn run_overhead_breakdown() {
     };
     log::info!("GPU: {}", gpu.adapter_info());
 
+    // Shared GPU resources 
     let camera_bgl = gpu.device.create_bind_group_layout(
         &wgpu::BindGroupLayoutDescriptor {
             label: Some("ob camera bgl"),
@@ -104,26 +95,39 @@ pub fn run_overhead_breakdown() {
     let mut camera = Camera::new(1280.0 / 720.0);
     camera.position = glam::Vec3::new(0.0, 120.0, -200.0);
     camera.forward  = glam::Vec3::new(0.0, -0.25, 1.0).normalize();
+    write_uniform(&gpu.queue, &camera_buf, &CameraUniform::from_camera(&camera));
+
+    // Naive pipeline for comparison draw calls
+    let naive_pipeline = crate::pipeline::OptimisedPipeline::new(
+        &gpu.device, RENDER_FORMAT, &camera_bgl,
+    );
+
+    // Print header 
 
     println!("\n{:>6} | {:>10} {:>10} {:>10} | {:>10} {:>10} {:>10} {:>10} | {:>10}",
         "chunks", "opt_total", "cull_reset", "cull_disp",
-        "indirect_rb", "upload_ms", "vram_mib", "quads", "note");
+        "naive_us", "upload_ms", "vram_mib", "quads", "note");
     println!("{}", "-".repeat(120));
 
+    struct Row {
+        chunks: usize,
+        naive_us: f64,
+        opt_us: f64,
+    }
+    let mut csv_rows: Vec<Row> = Vec::new();
+
+    // Per-chunk-count loop 
     for &n in COUNTS {
-        // Build a square patch of n chunks at the surface layer.
-        let side    = (n as f64).sqrt().ceil() as i32;
-        let mut world = World::new();
-        let params  = terrain.clone();
-
-        for cz in 0..side { for cx in 0..side {
-            let pos = IVec3::new(cx - side/2, 0, cz - side/2);
-            world.insert_chunk(pos, generate_chunk(pos, &params));
-        }}
-
+        let side = (n as f64).sqrt().ceil() as i32;
         let actual_n = (side * side) as usize;
 
-        // Build vertex pool
+        // Build world
+        let mut world = World::new();
+        for cz in 0..side { for cx in 0..side {
+            let pos = IVec3::new(cx - side/2, 0, cz - side/2);
+            world.insert_chunk(pos, generate_chunk(pos, &terrain));
+        }}
+
         let t_upload = Instant::now();
         let mut pool = VertexPool::new(&gpu.device);
         for cz in 0..side { for cx in 0..side {
@@ -137,11 +141,9 @@ pub fn run_overhead_breakdown() {
         gpu.device.poll(wgpu::Maintain::Wait);
         let upload_ms = t_upload.elapsed().as_secs_f64() * 1000.0;
 
-        let total_quads   = pool.total_quads();
-        let vram_bytes    = pool.allocated_bytes();
-        let vram_mib      = vram_bytes as f64 / (1024.0 * 1024.0);
+        let total_quads = pool.total_quads();
+        let vram_mib    = pool.allocated_bytes() as f64 / (1024.0 * 1024.0);
 
-        // Upload chunk origins
         for (pos, record) in pool.chunks.iter() {
             let slot   = record.slot_range.first;
             let origin = [
@@ -170,7 +172,7 @@ pub fn run_overhead_breakdown() {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: indirect.buffer.as_entire_binding() }],
         });
 
-        // ── Measure: indirect buffer reset (CPU write_buffer) ─────────────────
+        // indirect buffer reset 
         let mut reset_times = Vec::with_capacity(FRAMES as usize);
         for i in 0..WARMUP + FRAMES {
             let t = Instant::now();
@@ -180,7 +182,7 @@ pub fn run_overhead_breakdown() {
         }
         let reset_avg_us = avg_us(&reset_times);
 
-        // ── Measure: compute cull dispatch ────────────────────────────────────
+        // compute cull dispatch 
         let mut cull_times = Vec::with_capacity(FRAMES as usize);
         for i in 0..WARMUP + FRAMES {
             indirect.reset_instance_counts(&gpu.queue);
@@ -202,9 +204,8 @@ pub fn run_overhead_breakdown() {
         }
         let cull_avg_us = avg_us(&cull_times);
 
-        // ── Measure: full optimised frame (reset + cull + render) ─────────────
-        write_uniform(&gpu.queue, &camera_buf, &CameraUniform::from_camera(&camera));
-        let mut frame_times = Vec::with_capacity(FRAMES as usize);
+        // full optimised frame 
+        let mut opt_times = Vec::with_capacity(FRAMES as usize);
         for i in 0..WARMUP + FRAMES {
             let t = Instant::now();
             indirect.reset_instance_counts(&gpu.queue);
@@ -239,7 +240,7 @@ pub fn run_overhead_breakdown() {
                     timestamp_writes: None, occlusion_query_set: None,
                 });
                 rp.set_pipeline(&pipeline.pipeline);
-                rp.set_bind_group(0, &camera_bg,        &[]);
+                rp.set_bind_group(0, &camera_bg,         &[]);
                 rp.set_bind_group(1, &origins_bg_render, &[]);
                 rp.set_bind_group(2, &quad_bg,           &[]);
                 if draw_count > 0 {
@@ -248,10 +249,51 @@ pub fn run_overhead_breakdown() {
             }
             gpu.queue.submit(std::iter::once(enc.finish()));
             gpu.device.poll(wgpu::Maintain::Wait);
-            if i >= WARMUP { frame_times.push(t.elapsed()); }
+            if i >= WARMUP { opt_times.push(t.elapsed()); }
         }
-        let total_avg_us = avg_us(&frame_times);
-        let fps = 1_000_000.0 / total_avg_us;
+        let opt_total_us = avg_us(&opt_times);
+
+        // naive equivalent 
+        let mut naive_times = Vec::with_capacity(FRAMES as usize);
+        for i in 0..WARMUP + FRAMES {
+            let t = Instant::now();
+            let mut enc = gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("naive frame") });
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("naive render"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &render_view, resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None, occlusion_query_set: None,
+                });
+                rp.set_pipeline(&naive_pipeline.pipeline);
+                rp.set_bind_group(0, &camera_bg, &[]);
+                rp.set_bind_group(2, &quad_bg,   &[]);
+          
+                for entry_idx in 0..draw_count {
+                    let offset = (entry_idx as u64)
+                        * std::mem::size_of::<DrawIndirectArgs>() as u64;
+                    rp.set_bind_group(1, &origins_bg_render, &[]);
+                    rp.draw_indirect(&indirect.buffer, offset);
+                }
+            }
+            gpu.queue.submit(std::iter::once(enc.finish()));
+            gpu.device.poll(wgpu::Maintain::Wait);
+            if i >= WARMUP { naive_times.push(t.elapsed()); }
+        }
+        let naive_total_us = avg_us(&naive_times);
 
         let note = if actual_n != n as usize {
             format!("actual={}", actual_n)
@@ -259,22 +301,44 @@ pub fn run_overhead_breakdown() {
             String::new()
         };
 
-        println!("{:>6} | {:>9.1}µs {:>9.1}µs {:>9.1}µs | {:>10} {:>9.1}ms {:>8.1} {:>8} | {}",
+        println!("{:>6} | {:>9.1}µs {:>9.1}µs {:>9.1}µs | {:>9.1}µs {:>9.1}ms {:>8.1} {:>8} | {}",
             draw_count,
-            total_avg_us, reset_avg_us, cull_avg_us,
-            format!("N/A"), upload_ms, vram_mib, total_quads,
+            opt_total_us, reset_avg_us, cull_avg_us,
+            naive_total_us, upload_ms, vram_mib, total_quads,
             note
         );
+
+        csv_rows.push(Row {
+            chunks: draw_count as usize,
+            naive_us: naive_total_us,
+            opt_us: opt_total_us,
+        });
     }
 
     println!("\nLegend:");
-    println!("  opt_total   = full optimised frame time (µs)");
-    println!("  cull_reset  = CPU write_buffer to reset instance_counts (µs)");
-    println!("  cull_disp   = compute dispatch time inc. GPU sync (µs)");
-    println!("  upload_ms   = one-time mesh upload time");
-    println!("  vram_mib    = vertex pool VRAM usage");
-    println!("  quads       = total greedy quads in pool");
-    println!("\nCompare opt_total against naive ~0.3ms (3478 FPS) to find crossover.");
+    println!("  opt_total  = full optimised frame (reset + cull dispatch + multi_draw)");
+    println!("  cull_reset = CPU write_buffer to restore instance_count=1");
+    println!("  cull_disp  = compute dispatch time inc. GPU sync");
+    println!("  naive_us   = N individual draw_indirect calls (naive O(N) equivalent)");
+    println!("  upload_ms  = one-time mesh upload time (not part of frame time)");
+    println!("  vram_mib   = vertex pool VRAM (allocated_slots × 32 KiB)");
+    println!("  quads      = total greedy quads in pool");
+
+
+
+    let csv_path = std::path::Path::new("results/overhead.csv");
+    std::fs::create_dir_all("results").ok();
+    match std::fs::File::create(csv_path) {
+        Ok(mut f) => {
+            writeln!(f, "chunks,naive_us,opt_us").ok();
+            for row in &csv_rows {
+                writeln!(f, "{},{:.1},{:.1}", row.chunks, row.naive_us, row.opt_us).ok();
+            }
+            println!("\nWrote overhead data to {}", csv_path.display());
+            println!("Run: python3 scripts/plot_benchmarks.py to generate Fig 12.");
+        }
+        Err(e) => eprintln!("\nWarning: could not write overhead.csv: {e}"),
+    }
 }
 
 fn avg_us(times: &[Duration]) -> f64 {

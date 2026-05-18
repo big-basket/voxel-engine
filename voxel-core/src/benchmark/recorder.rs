@@ -3,18 +3,14 @@ use std::path::{Path, PathBuf};
 
 use super::metrics::{FrameMetrics, MetricsSummary};
 
-/// Writes benchmark results to the `results/` directory.
-///
-/// Per-run output:
-///   results/{renderer}_{scene_id}_frames.csv  — one row per frame
-///   results/{renderer}_{scene_id}_summary.json — aggregated stats
+
 pub struct Recorder {
     output_dir: PathBuf,
     renderer_name: String,
 }
 
 impl Recorder {
-    /// Creates a new recorder.
+
     /// `renderer_name` should be `"naive"` or `"optimised"` — used in filenames.
     /// `output_dir` is created if it does not exist.
     pub fn new(renderer_name: impl Into<String>, output_dir: impl AsRef<Path>) -> Self {
@@ -26,7 +22,6 @@ impl Recorder {
         }
     }
 
-    /// Writes the per-frame CSV for a scene.
     pub fn write_frames(
         &self,
         scene_id: &str,
@@ -58,7 +53,6 @@ impl Recorder {
         Ok(path)
     }
 
-    /// Writes the summary JSON for a scene.
     pub fn write_summary(
         &self,
         scene_id: &str,
@@ -100,7 +94,6 @@ impl Recorder {
         Ok(path)
     }
 
-    /// Convenience: writes both frames CSV and summary JSON in one call.
     pub fn write_all(
         &self,
         scene_id: &str,

@@ -40,7 +40,7 @@
 
 use crate::world::{Chunk, CHUNK_SIZE};
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+//  Constants ─
 
 /// CHUNK_SIZE as u32 for bitfield arithmetic.
 const CS: usize = CHUNK_SIZE; // 32
@@ -54,7 +54,7 @@ pub const FACE_NEG_Y: usize = 3;
 pub const FACE_POS_Z: usize = 4;
 pub const FACE_NEG_Z: usize = 5;
 
-// ── Output types ──────────────────────────────────────────────────────────────
+//  Output types 
 
 /// A single greedy quad, ready for upload into the GPU vertex pool.
 ///
@@ -109,19 +109,8 @@ impl GreedyQuad {
     }
 }
 
-// ── Neighbour data ────────────────────────────────────────────────────────────
+//  Neighbour data 
 
-/// Edge voxel data from the six face-adjacent chunks, used for accurate
-/// boundary face culling. Each slice is exactly `CHUNK_SIZE * CHUNK_SIZE`
-/// bytes — one byte per voxel on that face.
-///
-/// Layout for each face:
-///   - `pos_x`: the NEG_X face of the chunk at (chunk_pos + (1,0,0))
-///   - `neg_x`: the POS_X face of the chunk at (chunk_pos - (1,0,0))
-///   - `pos_y`: the NEG_Y face of the chunk at (chunk_pos + (0,1,0))
-///   - `neg_y`: the POS_Y face of the chunk at (chunk_pos - (0,1,0))
-///   - `pos_z`: the NEG_Z face of the chunk at (chunk_pos + (0,0,1))
-///   - `neg_z`: the POS_Z face of the chunk at (chunk_pos - (0,0,1))
 pub struct NeighbourData<'a> {
     pub pos_x: &'a [u8; CS2],
     pub neg_x: &'a [u8; CS2],
@@ -131,16 +120,12 @@ pub struct NeighbourData<'a> {
     pub neg_z: &'a [u8; CS2],
 }
 
-// ── Occupancy mask ────────────────────────────────────────────────────────────
+//  Occupancy mask 
 
-/// A 32×32 occupancy mask for one axis direction.
-/// `mask[y][z]` is a 32-bit word where bit `x` is 1 if voxel (x, y, z) is solid.
 #[allow(dead_code)]
 type OccupancyMask = [[u32; CS]; CS];
 
-/// Builds the occupancy mask from a chunk's voxel bytes.
-/// Optionally extends the mask one step past each face using neighbour data
-/// so that boundary faces are culled accurately.
+
 #[allow(dead_code)]
 fn build_occupancy(chunk: &Chunk, _neighbours: Option<&NeighbourData<'_>>) -> OccupancyMask {
     let mut mask = [[0u32; CS]; CS];
@@ -157,13 +142,7 @@ fn build_occupancy(chunk: &Chunk, _neighbours: Option<&NeighbourData<'_>>) -> Oc
     mask
 }
 
-// ── Face mask extraction ───────────────────────────────────────────────────────
-
-/// For the ±X faces, a face is exposed if the voxel is solid and its X-axis
-/// neighbour is air. Shifting the mask by 1 in X and XOR'ing gives us exposed
-/// faces on both the positive and negative side at once.
-///
-/// For ±Y and ±Z faces the same principle applies but on different axes.
+//  Face mask extraction 
 
 #[allow(dead_code)]
 fn face_masks_x(mask: &OccupancyMask) -> ([OccupancyMask; 1], [OccupancyMask; 1]) {
@@ -181,16 +160,9 @@ fn face_masks_x(mask: &OccupancyMask) -> ([OccupancyMask; 1], [OccupancyMask; 1]
     (pos, neg)
 }
 
-// ── Main mesher ───────────────────────────────────────────────────────────────
+//  Main mesher 
 
-/// Meshes a chunk using binary greedy meshing.
-///
-/// Returns a `Vec<GreedyQuad>` — typically orders of magnitude smaller
-/// than the naive per-face output for terrain chunks.
-///
-/// `neighbours` is optional. When `None`, boundary faces are always emitted
-/// (conservative). When `Some(_)`, boundary faces are culled against the
-/// actual neighbour voxels.
+
 pub fn mesh_chunk(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Vec<GreedyQuad> {
     if chunk.is_empty() {
         return Vec::new();
@@ -198,20 +170,14 @@ pub fn mesh_chunk(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Vec<
 
     let mut quads = Vec::new();
 
-    // ── ±Y faces (horizontal slabs) ───────────────────────────────────────────
-    // Iterate Y layers. For each Y, build a 32×32 presence grid and greedily
-    // merge runs in X then Z.
     for face in [FACE_POS_Y, FACE_NEG_Y] {
         for y in 0..CS {
-            // The "above" layer for POS_Y face culling, or "below" for NEG_Y.
             let neighbour_y = if face == FACE_POS_Y {
                 if y + 1 < CS { y + 1 } else { CS } // CS signals "use neighbour chunk"
             } else {
                 if y > 0 { y - 1 } else { CS }
             };
 
-            // Build a 32×32 presence mask for this Y-layer face.
-            // A face is present if the voxel is solid and the neighbour (above/below) is air.
             let mut face_present  = [[0u8; CS]; CS]; // [z][x]
             let mut face_voxel_id = [[0u8; CS]; CS]; // [z][x]
 
@@ -258,7 +224,6 @@ pub fn mesh_chunk(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Vec<
                         w += 1;
                     }
 
-                    // Extend in +Z
                     let mut h = 1usize;
                     'outer: while z + h < CS {
                         for dx in 0..w {
@@ -272,7 +237,6 @@ pub fn mesh_chunk(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Vec<
                         h += 1;
                     }
 
-                    // Mark visited
                     for dz in 0..h {
                         for dx in 0..w {
                             visited[z + dz][x + dx] = true;
@@ -290,7 +254,7 @@ pub fn mesh_chunk(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Vec<
         }
     }
 
-    // ── ±Z faces (front/back slabs) ────────────────────────────────────────────
+    //  ±Z faces 
     for face in [FACE_POS_Z, FACE_NEG_Z] {
         for z in 0..CS {
             let neighbour_z = if face == FACE_POS_Z {
@@ -371,7 +335,7 @@ pub fn mesh_chunk(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Vec<
         }
     }
 
-    // ── ±X faces (left/right slabs) ────────────────────────────────────────────
+    //  ±X faces 
     for face in [FACE_POS_X, FACE_NEG_X] {
         for x in 0..CS {
             let neighbour_x = if face == FACE_POS_X {
@@ -455,10 +419,7 @@ pub fn mesh_chunk(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>) -> Vec<
     quads
 }
 
-// ── Timing helper ─────────────────────────────────────────────────────────────
-
-/// Returns how many quads `mesh_chunk` produces for a chunk, along with the
-/// elapsed time in microseconds. Used by benchmarks to measure mesher speed.
+//  Timing 
 pub fn mesh_chunk_timed(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>)
     -> (Vec<GreedyQuad>, u128)
 {
@@ -468,14 +429,13 @@ pub fn mesh_chunk_timed(chunk: &Chunk, neighbours: Option<&NeighbourData<'_>>)
     (quads, us)
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+//  Tests 
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::world::{Chunk, VoxelId};
 
-    // ── GreedyQuad encoding ───────────────────────────────────────────────────
 
     #[test]
     fn quad_packing_roundtrip() {
@@ -489,7 +449,6 @@ mod tests {
 
     #[test]
     fn quad_max_values() {
-        // Coordinates up to CS (32) for the "far" face edge, dimensions up to CS.
         let q = GreedyQuad::new(32, 32, 32, 32, 32, FACE_NEG_Z as u32, 255);
         let (x, y, z, w, h) = q.decode_pos();
         assert_eq!((x, y, z, w, h), (32, 32, 32, 32, 32));
@@ -498,7 +457,6 @@ mod tests {
         assert_eq!(vid, 255);
     }
 
-    // ── Empty / all-solid chunks ──────────────────────────────────────────────
 
     #[test]
     fn empty_chunk_produces_no_quads() {
@@ -512,8 +470,6 @@ mod tests {
         let mut chunk = Chunk::empty();
         chunk.fill(VoxelId::STONE);
         let quads = mesh_chunk(&chunk, None);
-        // A fully solid chunk has 6 faces × (32×32 = 1024 voxels) = 6144 naive faces.
-        // Greedy meshing should merge each face into a single 32×32 quad → 6 quads.
         assert_eq!(quads.len(), 6, "fully solid chunk should produce exactly 6 quads (one per face)");
     }
 
@@ -530,7 +486,6 @@ mod tests {
         }
     }
 
-    // ── Single voxel ──────────────────────────────────────────────────────────
 
     #[test]
     fn single_voxel_has_six_quads() {
@@ -552,7 +507,6 @@ mod tests {
         }
     }
 
-    // ── Face reduction ────────────────────────────────────────────────────────
 
     #[test]
     fn two_adjacent_voxels_share_no_internal_face() {
@@ -560,65 +514,42 @@ mod tests {
         chunk.set(0, 0, 0, VoxelId::STONE);
         chunk.set(1, 0, 0, VoxelId::STONE);
         let quads = mesh_chunk(&chunk, None);
-        // Two adjacent X-axis voxels: 12 naive faces - 2 hidden internal = 10 faces.
-        // Greedy should merge the top, bottom, front, back into 1×2 quads (4 quads)
-        // and the two side faces remain 1×1 each (2 quads) → total 10 quads.
-        // We just verify it's less than the naive 12.
         assert!(quads.len() < 12, "adjacent voxels should have fewer quads than isolated: got {}", quads.len());
     }
 
     #[test]
     fn flat_layer_reduces_to_two_quads() {
-        // A full Y=0 layer of identical voxels: the top and bottom faces
-        // each merge into one 32×32 quad. Side faces also merge into strips.
         let mut chunk = Chunk::empty();
         chunk.fill_layer(0, VoxelId::STONE);
         let quads = mesh_chunk(&chunk, None);
-        // Top: 1 quad (32×32)
-        // Bottom: 1 quad (32×32)
-        // Four sides: 4 quads (32×1 each, since height=1)
-        // Total: 6 quads
         assert_eq!(quads.len(), 6, "single flat layer should produce 6 quads, got {}", quads.len());
     }
 
     #[test]
     fn two_different_voxel_types_not_merged() {
-        // A row of alternating stone/dirt — greedy should NOT merge them.
         let mut chunk = Chunk::empty();
         for x in 0..CS {
             let vid = if x % 2 == 0 { VoxelId::STONE } else { VoxelId::DIRT };
             chunk.set(x, 0, 0, vid);
         }
         let quads = mesh_chunk(&chunk, None);
-        // Each voxel is isolated (alternating types), so no merging is possible.
-        // 6 faces per voxel × 32 voxels = 192 naive faces.
-        // Top/bottom for each voxel: no merging possible (alternating types).
-        // Side faces in X: no merging (alternating types).
-        // The result should be the same as 32 isolated voxels.
         let single_quads = {
             let mut c = Chunk::empty();
             c.set(0, 0, 0, VoxelId::STONE);
             mesh_chunk(&c, None).len()
         };
-        // 32 alternating isolated voxels = 32 × 6 quads maximum (some sides merge).
-        // Exact count depends on side face merging, but they should not be merged into
-        // fewer than 32 top quads + 32 bottom quads = at least 64 quads.
         assert!(quads.len() >= 64, "alternating types should not merge tops/bottoms: got {}", quads.len());
     }
 
-    // ── Naive vs greedy quad count ────────────────────────────────────────────
 
     #[test]
     fn greedy_never_produces_more_quads_than_naive() {
         use crate::gen::noise::{TerrainParams, generate_chunk};
         use glam::IVec3;
-        // A surface chunk should have significantly fewer greedy quads
-        // than naive faces.
         let params = TerrainParams { sea_level: 16, amplitude: 4.0, ..Default::default() };
         let chunk = generate_chunk(IVec3::new(0, 0, 0), &params);
         let greedy_count = mesh_chunk(&chunk, None).len();
 
-        // Naive face count: count exposed faces manually
         let mut naive_count = 0usize;
         for y in 0..CS {
             for z in 0..CS {
@@ -658,7 +589,6 @@ mod tests {
         }
     }
 
-    // ── Correctness: all surfaces covered ─────────────────────────────────────
 
     #[test]
     fn all_exposed_faces_are_covered_single_voxel() {
@@ -693,7 +623,6 @@ mod tests {
         }
     }
 
-    // ── Timing sanity ─────────────────────────────────────────────────────────
 
     #[test]
     fn mesh_chunk_timed_returns_nonzero_duration_for_non_empty() {

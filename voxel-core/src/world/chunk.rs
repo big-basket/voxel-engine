@@ -1,30 +1,16 @@
 use super::voxel::VoxelId;
 
-/// Side length of a chunk in voxels. Must be a power of two.
 pub const CHUNK_SIZE: usize = 32;
-/// CHUNK_SIZE as i32 for signed arithmetic.
 pub const CHUNK_SIZE_I: i32 = CHUNK_SIZE as i32;
-/// Total number of voxels in a chunk (32³ = 32 768).
 pub const CHUNK_VOLUME: usize = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
-/// A chunk is a 32×32×32 block of voxels stored as a flat byte array.
-///
-/// Layout: `index = x + z * CHUNK_SIZE + y * CHUNK_SIZE * CHUNK_SIZE`
-/// (x is the inner-most axis for cache locality when iterating a face slice).
-///
-/// The array lives on the heap (Box) so a Chunk is pointer-sized on the stack.
-/// At 32 KiB per chunk this keeps stack usage reasonable even when the world
-/// module holds many chunks in a HashMap.
 #[derive(Clone)]
 pub struct Chunk {
-    /// Raw voxel data. 0 = air, anything else = solid block.
     voxels: Box<[u8; CHUNK_VOLUME]>,
-    /// True if this chunk has been modified since the last persistence flush.
     pub dirty: bool,
 }
 
 impl Chunk {
-    /// Creates an empty (all-air) chunk.
     pub fn empty() -> Self {
         Chunk {
             voxels: Box::new([0u8; CHUNK_VOLUME]),
@@ -32,8 +18,6 @@ impl Chunk {
         }
     }
 
-    /// Creates a chunk from raw bytes (e.g. loaded from redb).
-    /// Returns `None` if the slice is not exactly `CHUNK_VOLUME` bytes.
     pub fn from_raw(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != CHUNK_VOLUME {
             return None;
@@ -46,18 +30,11 @@ impl Chunk {
         })
     }
 
-    /// Returns a reference to the raw voxel byte slice.
-    /// Useful for serialisation without an extra copy.
     pub fn as_bytes(&self) -> &[u8] {
         self.voxels.as_ref()
     }
 
-    // ── Coordinate helpers ──────────────────────────────────────────────────
 
-    /// Converts (x, y, z) local chunk coordinates to a flat array index.
-    ///
-    /// # Panics (debug only)
-    /// Panics if any coordinate is >= CHUNK_SIZE.
     #[inline]
     pub fn index(x: usize, y: usize, z: usize) -> usize {
         debug_assert!(x < CHUNK_SIZE, "x={x} out of range");
@@ -66,7 +43,6 @@ impl Chunk {
         x + z * CHUNK_SIZE + y * CHUNK_SIZE * CHUNK_SIZE
     }
 
-    /// Returns the (x, y, z) local coordinates for a flat index.
     #[inline]
     pub fn coords(index: usize) -> (usize, usize, usize) {
         let x = index % CHUNK_SIZE;
@@ -75,9 +51,7 @@ impl Chunk {
         (x, y, z)
     }
 
-    // ── Voxel accessors ─────────────────────────────────────────────────────
 
-    /// Gets the voxel at local coordinates. Returns AIR for out-of-bounds.
     #[inline]
     pub fn get(&self, x: usize, y: usize, z: usize) -> VoxelId {
         if x >= CHUNK_SIZE || y >= CHUNK_SIZE || z >= CHUNK_SIZE {
@@ -86,14 +60,11 @@ impl Chunk {
         VoxelId(self.voxels[Self::index(x, y, z)])
     }
 
-    /// Gets the voxel at a flat index.
     #[inline]
     pub fn get_idx(&self, idx: usize) -> VoxelId {
         VoxelId(self.voxels[idx])
     }
 
-    /// Sets the voxel at local coordinates and marks the chunk dirty.
-    /// Out-of-bounds writes are silently ignored.
     #[inline]
     pub fn set(&mut self, x: usize, y: usize, z: usize, id: VoxelId) {
         if x >= CHUNK_SIZE || y >= CHUNK_SIZE || z >= CHUNK_SIZE {
@@ -104,28 +75,23 @@ impl Chunk {
         self.dirty = true;
     }
 
-    /// Returns true if every voxel in this chunk is air.
     pub fn is_empty(&self) -> bool {
         self.voxels.iter().all(|&v| v == 0)
     }
 
-    /// Returns the number of non-air voxels. Useful for stress-test metrics.
     pub fn solid_count(&self) -> usize {
         self.voxels.iter().filter(|&&v| v != 0).count()
     }
 
-    /// Clears the dirty flag after a successful persistence flush.
     pub fn mark_clean(&mut self) {
         self.dirty = false;
     }
 
-    /// Fills the entire chunk with a single voxel type.
     pub fn fill(&mut self, id: VoxelId) {
         self.voxels.iter_mut().for_each(|v| *v = id.0);
         self.dirty = true;
     }
 
-    /// Fills a y-slice (a horizontal layer) with a single voxel type.
     pub fn fill_layer(&mut self, y: usize, id: VoxelId) {
         if y >= CHUNK_SIZE {
             return;

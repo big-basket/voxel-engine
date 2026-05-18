@@ -1,13 +1,4 @@
 /// Frustum cull compute pipeline.
-///
-/// Runs once per frame before the render pass. Each thread processes one
-/// indirect draw entry, testing its chunk AABB against the 6 camera frustum
-/// planes. Culled chunks have their instance_count set to 0 in the indirect
-/// buffer — multi_draw_indirect skips them automatically.
-///
-/// The indirect buffer must be reset to instance_count=1 before each cull pass
-/// so that chunks visible last frame but culled this frame are correctly hidden,
-/// and chunks culled last frame but visible this frame are correctly shown.
 
 use voxel_core::camera::CameraUniform;
 
@@ -16,13 +7,10 @@ const WORKGROUP_SIZE: u32 = 64;
 pub struct CullPipeline {
     pub pipeline: wgpu::ComputePipeline,
 
-    /// @group(0): camera uniform (shared with render pipeline)
     pub camera_bgl: wgpu::BindGroupLayout,
 
-    /// @group(1): chunk origins storage buffer (read-only)
     pub origins_bgl: wgpu::BindGroupLayout,
 
-    /// @group(2): indirect draw buffer (read_write — writes instance_count)
     pub indirect_bgl: wgpu::BindGroupLayout,
 }
 
@@ -35,7 +23,6 @@ impl CullPipeline {
             ),
         });
 
-        // @group(0) @binding(0): camera uniform
         let camera_bgl = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label:   Some("cull camera bgl"),
@@ -52,7 +39,6 @@ impl CullPipeline {
             }
         );
 
-        // @group(1) @binding(0): chunk origins (read-only storage)
         let origins_bgl = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label:   Some("cull origins bgl"),
@@ -69,7 +55,6 @@ impl CullPipeline {
             }
         );
 
-        // @group(2) @binding(0): indirect draw buffer (read_write)
         let indirect_bgl = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label:   Some("cull indirect bgl"),
@@ -104,7 +89,6 @@ impl CullPipeline {
         CullPipeline { pipeline, camera_bgl, origins_bgl, indirect_bgl }
     }
 
-    /// Number of workgroups needed to cover `draw_count` threads.
     pub fn dispatch_size(draw_count: u32) -> u32 {
         draw_count.div_ceil(WORKGROUP_SIZE)
     }

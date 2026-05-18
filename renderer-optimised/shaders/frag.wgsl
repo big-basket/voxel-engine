@@ -1,6 +1,4 @@
-// Optimised renderer — fragment shader.
-// Palette and face-brightness logic is identical to the naive renderer.
-// VertexOutput is defined in vert.wgsl (concatenated before this file).
+// Optimised renderer
 
 const FACE_POS_X: u32 = 0u;
 const FACE_NEG_X: u32 = 1u;

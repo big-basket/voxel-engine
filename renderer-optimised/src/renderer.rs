@@ -1,6 +1,4 @@
-/// OptimisedRenderer — GPU surface + vertex-pulling render pass.
-/// Uses the vertex pool's storage buffer and per-chunk draw calls.
-/// Build order 4 will replace the draw loop with multi_draw_indirect.
+/// OptimisedRenderer 
 use std::sync::Arc;
 
 use wgpu::{
@@ -41,16 +39,13 @@ pub struct OptimisedRenderer {
     cull_origins_bg:      wgpu::BindGroup,
     cull_indirect_bg:     wgpu::BindGroup,
 
-    /// Storage buffer of chunk world-space origins, one vec4 per pool slot.
     chunk_origins_buf:        wgpu::Buffer,
     chunk_origins_bind_group: wgpu::BindGroup,
 
     pub world: WorldManager,
 
-    /// True after the first frame flushes pending chunk uploads.
     uploads_flushed: bool,
 
-    /// True after the first frame logs the draw call summary.
     logged_draw_summary: bool,
 }
 
@@ -120,7 +115,6 @@ impl OptimisedRenderer {
         let pipeline = OptimisedPipeline::new(&gpu.device, surface_format, &camera_bgl);
         let world    = WorldManager::new(&gpu.device, &pipeline, extent);
 
-        // Chunk origins storage buffer — one vec4 per pool slot.
         let origins_size = (crate::vertex_pool::MAX_SLOTS * 4 * 4) as u64;
         let chunk_origins_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label:              Some("chunk origins storage"),
@@ -140,7 +134,7 @@ impl OptimisedRenderer {
             }],
         });
 
-        // ── Compute cull pipeline ─────────────────────────────────────────────
+        // Compute cull pipeline      
         let cull_pipeline = crate::cull_pipeline::CullPipeline::new(&gpu.device);
 
         let cull_camera_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -183,7 +177,7 @@ impl OptimisedRenderer {
         })
     }
 
-    // ── Brush pass-throughs ───────────────────────────────────────────────────
+    // Brush pass-throughs
 
     pub fn raycast(&self, camera: &Camera) -> Option<RayHit> {
         self.world.raycast(camera)
@@ -205,7 +199,7 @@ impl OptimisedRenderer {
     pub fn save(&mut self)               { self.world.save(); }
     pub fn dirty_count(&self) -> usize   { self.world.dirty_count() }
 
-    // ── Resize ────────────────────────────────────────────────────────────────
+    // Resize 
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 { return; }
@@ -217,7 +211,7 @@ impl OptimisedRenderer {
         self.depth_view    = view;
     }
 
-    // ── Render ────────────────────────────────────────────────────────────────
+    // Render
 
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
         if !self.uploads_flushed {
@@ -326,7 +320,6 @@ impl OptimisedRenderer {
         }
     }
 
-    /// Called after any remesh to keep chunk_origins_buf in sync.
     pub fn refresh_origins(&self) {
         Self::upload_origins(&self.gpu.queue, &self.chunk_origins_buf, &self.world);
     }

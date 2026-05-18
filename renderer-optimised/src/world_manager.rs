@@ -1,6 +1,4 @@
-/// WorldManager — greedy meshing, vertex pool upload, persistence.
-/// Mirrors renderer-naive's world_manager.rs but uses GreedyQuad + VertexPool
-/// instead of per-chunk vertex buffers.
+/// WorldManager 
 use std::collections::HashSet;
 
 use glam::IVec3;
@@ -17,14 +15,10 @@ use crate::indirect::IndirectBuffer;
 use crate::pipeline::OptimisedPipeline;
 use crate::vertex_pool::VertexPool;
 
-// ── WorldExtent ───────────────────────────────────────────────────────────────
 
-/// Spatial extent of the world to load, derived from the benchmark scene kind.
 pub struct WorldExtent {
     pub draw_radius:     i32,
     pub vertical_layers: i32,
-    /// Terrain params from the scene — ensures the interactive preview generates
-    /// the same world as the benchmark, rather than using TerrainParams::default().
     pub terrain:         TerrainParams,
 }
 
@@ -38,7 +32,6 @@ impl Default for WorldExtent {
     }
 }
 
-// ── WorldManager ──────────────────────────────────────────────────────────────
 
 pub struct WorldManager {
     pub world:           World,
@@ -93,9 +86,6 @@ impl WorldManager {
         mgr
     }
 
-    // ── World loading ─────────────────────────────────────────────────────────
-
-    // ── load_world ────────────────────────────────────────────────────────────────
 
     fn load_world(store: &ChunkStore, extent: &WorldExtent) -> World {
         // Use the scene's actual terrain params, not the hardcoded default.

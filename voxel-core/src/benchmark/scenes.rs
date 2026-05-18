@@ -3,14 +3,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::gen::TerrainParams;
 
-/// The camera position and orientation for a scene.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraConfig {
     pub position: [f32; 3],
     pub forward:  [f32; 3],
 }
 
-/// Scene-specific parameters — tagged union so serde can round-trip it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SceneKind {
@@ -29,8 +27,7 @@ pub enum SceneKind {
 }
 
 impl SceneKind {
-    /// Returns `(draw_radius, vertical_layers)` for kinds that carry a spatial
-    /// extent. Returns a sensible default for kinds that do not.
+
     pub fn spatial_extent(&self) -> (i32, i32) {
         match self {
             SceneKind::StaticHighDensity { draw_radius, vertical_layers } => {
@@ -41,38 +38,27 @@ impl SceneKind {
     }
 }
 
-/// One benchmark scenario — fully serialisable so it can be loaded from JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkScene {
-    /// Short identifier used in CSV/JSON output filenames.
     pub id:          String,
-    /// Human-readable description written into the summary JSON.
     pub description: String,
-    /// Terrain generation parameters.
     pub terrain:     TerrainParams,
-    /// Camera config.
     pub camera:      CameraConfig,
-    /// Frames rendered but not measured at the start of each scene.
     pub warmup_frames:  u32,
-    /// Frames actually measured.
     pub measure_frames: u32,
-    /// Scene type and its specific parameters.
     pub kind: SceneKind,
 }
 
 impl BenchmarkScene {
-    /// Convenience accessor — returns camera position as Vec3.
     pub fn camera_pos(&self) -> Vec3 {
         Vec3::from(self.camera.position)
     }
 
-    /// Convenience accessor — returns normalised camera forward as Vec3.
     pub fn camera_forward(&self) -> Vec3 {
         Vec3::from(self.camera.forward).normalize()
     }
 }
 
-/// Full benchmark configuration — the top-level JSON structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkConfig {
     pub scenes: Vec<BenchmarkScene>,
@@ -80,7 +66,6 @@ pub struct BenchmarkConfig {
 
 impl BenchmarkConfig {
     /// Loads config from `benchmark_config.json` at `config_path`.
-    /// Returns the hardcoded defaults if the file is not found.
     pub fn load_or_default(config_path: &std::path::Path) -> Self {
         if config_path.exists() {
             let content = std::fs::read_to_string(config_path)
@@ -106,8 +91,6 @@ impl BenchmarkConfig {
         Self::default_config()
     }
 
-    /// Writes the current config to disk as pretty-printed JSON.
-    /// Useful for generating the initial file to edit from.
     pub fn write_default(path: &std::path::Path) -> std::io::Result<()> {
         let cfg = Self::default_config();
         let json = serde_json::to_string_pretty(&cfg).expect("serialise config");
@@ -191,5 +174,3 @@ impl BenchmarkConfig {
     }
 }
 
-// Keep TerrainParams serialisable — add derives there via the gen module.
-// The impl is here so callers only need to import scenes::{BenchmarkConfig, BenchmarkScene}.

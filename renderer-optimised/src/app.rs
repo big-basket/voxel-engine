@@ -1,5 +1,4 @@
 /// Application event loop for the optimised renderer.
-/// Structure mirrors renderer-naive/src/app.rs exactly.
 use std::sync::Arc;
 
 use winit::{
@@ -21,7 +20,6 @@ use crate::renderer::OptimisedRenderer;
 use crate::world_manager::WorldExtent;
 
 pub enum App {
-    /// `scene_preview` — if Some, loads the named scene's camera position on startup.
     Uninitialized { scene_preview: Option<String> },
     Running(RunningState),
 }
@@ -42,9 +40,7 @@ impl ApplicationHandler for App {
             App::Uninitialized { scene_preview } => scene_preview.take(),
         };
 
-        // Load the config once and find the requested scene (if any).
-        // We need both the camera and the extent from the same scene, so we
-        // find it once rather than searching twice.
+        // Load the config once and find the requested scene (if any)
         let config = BenchmarkConfig::load_or_default(
             std::path::Path::new("benchmark_config.json")
         );

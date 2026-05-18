@@ -1,7 +1,6 @@
 use wgpu::{Adapter, Device, DeviceDescriptor, Features, Instance, Queue};
 
-/// The shared wgpu context — everything both renderers need before they can
-/// build pipelines or upload data.
+/// The shared wgpu context 
 pub struct GpuContext {
     pub instance: Instance,
     pub adapter:  Adapter,
@@ -35,14 +34,9 @@ impl GpuContext {
             return Err(GpuError::MissingFeatures(missing));
         }
 
-        // Use the adapter's own limits as the baseline so we don't artificially
-        // cap resources below what the hardware supports.
-        // In particular, `max_storage_buffer_binding_size` defaults to 128 MiB
-        // in wgpu but modern Vulkan/DX12 adapters (e.g. RX 6800M) support up
-        // to 4 GiB. The optimised renderer's 256 MiB vertex pool requires this.
+        
         let mut limits = adapter.limits();
-        // Clamp to what the adapter actually advertises — prevents requesting
-        // more than the driver will grant.
+        
         limits.max_storage_buffer_binding_size =
             limits.max_storage_buffer_binding_size
                 .max(adapter.limits().max_storage_buffer_binding_size);
@@ -63,7 +57,6 @@ impl GpuContext {
         Ok(GpuContext { instance, adapter, device, queue })
     }
 
-    /// Creates a wgpu Instance (used by renderers that need a surface).
     pub fn create_instance() -> Instance {
         Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -71,7 +64,6 @@ impl GpuContext {
         })
     }
 
-    /// Initialises from an existing instance and surface (windowed renderers).
     pub fn from_surface(
         instance: Instance,
         surface:  &wgpu::Surface<'_>,
@@ -100,7 +92,6 @@ impl GpuContext {
             return Err(GpuError::MissingFeatures(missing));
         }
 
-        // Same as new_async: use the adapter's real limits.
         let limits = adapter.limits();
 
         let (device, queue) = adapter
@@ -119,7 +110,6 @@ impl GpuContext {
         Ok(GpuContext { instance, adapter, device, queue })
     }
 
-    /// Headless init (benchmarks, tests — no surface).
     pub fn new_headless(required_features: Features) -> Result<Self, GpuError> {
         Self::new(required_features)
     }
@@ -130,7 +120,6 @@ impl GpuContext {
     }
 }
 
-// ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum GpuError {

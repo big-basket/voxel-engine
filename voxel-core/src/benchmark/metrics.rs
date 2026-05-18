@@ -1,28 +1,19 @@
 use std::time::{Duration, Instant};
 
-/// All metrics recorded for a single frame.
 #[derive(Debug, Clone)]
 pub struct FrameMetrics {
-    /// Wall-clock frame time in milliseconds.
     pub frame_time_ms: f64,
-    /// Instantaneous FPS derived from frame_time_ms.
     pub fps: f64,
-    /// GPU VRAM used in bytes (queried from wgpu if available).
     pub vram_bytes: u64,
-    /// Total triangle count submitted to the GPU this frame.
     pub triangle_count: u64,
-    /// Total vertex count submitted.
     pub vertex_count: u64,
-    /// Total draw call count.
     pub draw_calls: u32,
 }
 
-/// Accumulates per-frame metrics across a benchmark run and computes summary stats.
 #[derive(Debug, Default)]
 pub struct MetricsCollector {
     frames: Vec<FrameMetrics>,
     frame_start: Option<Instant>,
-    /// Running triangle count for the current frame (reset each frame).
     pub current_triangles: u64,
     pub current_vertices: u64,
     pub current_draw_calls: u32,
@@ -33,7 +24,6 @@ impl MetricsCollector {
         MetricsCollector::default()
     }
 
-    /// Call at the start of each frame.
     pub fn begin_frame(&mut self) {
         self.frame_start = Some(Instant::now());
         self.current_triangles = 0;
@@ -41,16 +31,13 @@ impl MetricsCollector {
         self.current_draw_calls = 0;
     }
 
-    /// Register geometry being submitted this frame.
     pub fn record_draw(&mut self, vertex_count: u64, index_count: u64) {
         self.current_vertices += vertex_count;
         self.current_triangles += index_count / 3;
         self.current_draw_calls += 1;
     }
 
-    /// Call at the end of each frame to commit the frame's metrics.
-    /// `vram_bytes` should come from `device.global_report()` if available,
-    /// otherwise pass 0.
+
     pub fn end_frame(&mut self, vram_bytes: u64) {
         let elapsed = self
             .frame_start
@@ -71,17 +58,14 @@ impl MetricsCollector {
         });
     }
 
-    /// Number of frames recorded so far.
     pub fn frame_count(&self) -> usize {
         self.frames.len()
     }
 
-    /// Returns all recorded frames.
     pub fn frames(&self) -> &[FrameMetrics] {
         &self.frames
     }
 
-    /// Computes summary statistics over all recorded frames.
     pub fn summarise(&self) -> MetricsSummary {
         if self.frames.is_empty() {
             return MetricsSummary::default();
@@ -92,7 +76,6 @@ impl MetricsCollector {
         let avg_fps = self.frames.iter().map(|f| f.fps).sum::<f64>() / n;
         let avg_frame_ms = self.frames.iter().map(|f| f.frame_time_ms).sum::<f64>() / n;
 
-        // 1% low: average of the worst 1% of frame times (slowest = highest ms)
         let mut frame_times: Vec<f64> = self.frames.iter().map(|f| f.frame_time_ms).collect();
         frame_times.sort_by(|a, b| b.partial_cmp(a).unwrap()); // descending
         let one_pct_count = ((self.frames.len() as f64 * 0.01).ceil() as usize).max(1);
@@ -120,7 +103,6 @@ impl MetricsCollector {
     }
 }
 
-/// Summary statistics for a complete benchmark run.
 #[derive(Debug, Clone, Default)]
 pub struct MetricsSummary {
     pub frame_count: usize,
@@ -160,7 +142,6 @@ mod tests {
 
     #[test]
     fn avg_fps_is_correct() {
-        // 16.67ms = 60fps, 33.33ms = 30fps → avg ≈ 45fps
         let c = make_collector(&[16.666, 33.333]);
         let s = c.summarise();
         assert!((s.avg_fps - 45.0).abs() < 1.0, "avg_fps={}", s.avg_fps);
@@ -168,12 +149,10 @@ mod tests {
 
     #[test]
     fn one_pct_low_picks_worst_frames() {
-        // 100 frames: 99 at 16ms (60fps), 1 at 100ms (10fps)
         let mut times: Vec<f64> = vec![16.666; 99];
         times.push(100.0);
         let c = make_collector(&times);
         let s = c.summarise();
-        // 1% low should be close to 10fps (one slow frame)
         assert!(s.one_pct_low_fps < 15.0, "1% low={}", s.one_pct_low_fps);
         assert!(s.avg_fps > 55.0, "avg_fps={}", s.avg_fps);
     }

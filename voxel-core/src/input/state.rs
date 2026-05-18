@@ -1,7 +1,5 @@
 use std::collections::HashSet;
 
-/// Logical key codes — a thin wrapper so we don't pull winit into tests.
-/// The renderer's event loop maps winit KeyCode → this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Key {
     W, A, S, D,
@@ -10,15 +8,11 @@ pub enum Key {
     LControl,   // sprint
 }
 
-/// Snapshot of keyboard and mouse state for one frame.
 #[derive(Debug, Default)]
 pub struct InputState {
     held: HashSet<Key>,
-    /// Raw mouse delta accumulated since the last `take_mouse_delta` call.
     mouse_delta: (f32, f32),
-    /// True if the left mouse button is currently pressed.
     pub lmb_pressed: bool,
-    /// True if the right mouse button is currently pressed.
     pub rmb_pressed: bool,
 }
 
@@ -27,7 +21,6 @@ impl InputState {
         InputState::default()
     }
 
-    // ── Key state ────────────────────────────────────────────────────────────
 
     pub fn press(&mut self, key: Key) {
         self.held.insert(key);
@@ -41,29 +34,19 @@ impl InputState {
         self.held.contains(&key)
     }
 
-    // ── Mouse ────────────────────────────────────────────────────────────────
 
-    /// Accumulates a raw mouse motion event.
     pub fn accumulate_mouse(&mut self, dx: f32, dy: f32) {
         self.mouse_delta.0 += dx;
         self.mouse_delta.1 += dy;
     }
 
-    /// Returns the accumulated delta and resets it to zero.
-    /// Call once per frame before passing to the camera controller.
     pub fn take_mouse_delta(&mut self) -> (f32, f32) {
         let delta = self.mouse_delta;
         self.mouse_delta = (0.0, 0.0);
         delta
     }
 
-    // ── Movement axes ────────────────────────────────────────────────────────
 
-    /// Returns a (non-normalised) movement axis vector from held keys.
-    ///
-    /// +X = right (D), -X = left (A)
-    /// +Y = up (Space), -Y = down (LShift)
-    /// +Z = backward (S), -Z = forward (W)  ← matches camera convention
     pub fn movement_axes(&self) -> glam::Vec3 {
         let x = self.is_held(Key::D) as i32 - self.is_held(Key::A) as i32;
         let y = self.is_held(Key::Space) as i32 - self.is_held(Key::LShift) as i32;

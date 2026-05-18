@@ -1,6 +1,5 @@
-//! Optimised renderer entry point.
-//! Build order: greedy mesher (1) → vertex pool (2) → pipeline/vert.wgsl (3)
-//!              → indirect draw (4) → compute culling (5)
+// renderer entry point.
+
 
 mod app;
 mod bench;

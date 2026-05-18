@@ -1,9 +1,4 @@
-//! `voxel-core` — shared world state, persistence, terrain generation,
-//! camera, input, and benchmarking for the voxel rendering engine.
-//!
-//! Both `renderer-naive` and `renderer-optimised` depend on this crate.
-//! All unit tests live here; the renderer crates contain no tests of their own.
-
+//! `voxel-core` 
 pub mod benchmark;
 pub mod camera;
 pub mod gen;

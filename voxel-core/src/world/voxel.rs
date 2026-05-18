@@ -1,9 +1,4 @@
-/// A voxel identifier.
-///
-/// `0` is always AIR — transparent, not rendered, not stored in deltas.
-/// Values 1–255 map to entries in the block palette.
-/// Using u8 keeps the chunk grid at 32 KiB (32³ = 32 768 bytes), which fits
-/// comfortably in L2 cache on the RX 6800M and most desktop CPUs.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
 pub struct VoxelId(pub u8);
@@ -45,8 +40,6 @@ impl std::fmt::Display for VoxelId {
     }
 }
 
-/// Bitmask of which faces of a voxel are exposed to air.
-/// Used by the mesher to skip hidden faces without a second lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FaceMask(pub u8);
 
@@ -71,7 +64,6 @@ impl FaceMask {
     }
 }
 
-// ── Face index constants (used for array indexing in the mesher) ───────────────
 pub const FACE_POS_X: usize = 0;
 pub const FACE_NEG_X: usize = 1;
 pub const FACE_POS_Y: usize = 2;

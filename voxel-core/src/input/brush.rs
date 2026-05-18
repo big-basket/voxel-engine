@@ -5,27 +5,18 @@ use crate::world::{VoxelId, World};
 /// Result of a brush raycast.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RayHit {
-    /// The world-space voxel position that was hit.
     pub voxel_pos: IVec3,
-    /// The world-space position of the voxel just before the hit.
-    /// Used by `place` to know where to put a new block.
     pub prev_pos: IVec3,
-    /// Distance from the ray origin to the hit.
     pub distance: f32,
 }
 
-/// Casts a ray from `origin` in `direction` (normalised) and returns the
-/// first solid voxel hit within `max_distance` world units, if any.
-///
-/// Uses a DDA (Digital Differential Analyser) voxel traversal — it steps
-/// through voxels exactly, with no floating-point intersection errors.
+
 pub fn raycast(
     world: &World,
     origin: Vec3,
     direction: Vec3,
     max_distance: f32,
 ) -> Option<RayHit> {
-    // Current voxel position (integer)
     let mut pos = IVec3::new(
         origin.x.floor() as i32,
         origin.y.floor() as i32,
@@ -38,14 +29,12 @@ pub fn raycast(
         if direction.z >= 0.0 { 1 } else { -1 },
     );
 
-    // t_delta: how far along the ray to cross one full voxel in each axis.
     let t_delta = Vec3::new(
         if direction.x.abs() > 1e-9 { 1.0 / direction.x.abs() } else { f32::INFINITY },
         if direction.y.abs() > 1e-9 { 1.0 / direction.y.abs() } else { f32::INFINITY },
         if direction.z.abs() > 1e-9 { 1.0 / direction.z.abs() } else { f32::INFINITY },
     );
 
-    // t_max: t-value at the next voxel boundary in each axis.
     let t_max = Vec3::new(
         if direction.x >= 0.0 {
             (pos.x as f32 + 1.0 - origin.x) / direction.x.abs().max(1e-9)
@@ -79,7 +68,6 @@ pub fn raycast(
 
         prev_pos = pos;
 
-        // Step along the axis with the smallest t_max.
         if t_max.x < t_max.y && t_max.x < t_max.z {
             t = t_max.x;
             t_max.x += t_delta.x;
@@ -96,8 +84,7 @@ pub fn raycast(
     }
 }
 
-/// Removes voxels in a sphere around `hit.voxel_pos` (sets them to AIR).
-/// Returns a list of positions that were successfully modified.
+
 pub fn remove(world: &mut World, hit: &RayHit, radius: u32) -> Vec<IVec3> {
     let mut modified = Vec::new();
     let center = hit.voxel_pos;
@@ -118,8 +105,7 @@ pub fn remove(world: &mut World, hit: &RayHit, radius: u32) -> Vec<IVec3> {
     modified
 }
 
-/// Places `id` in a sphere around `hit.prev_pos` (the face in front of the hit voxel).
-/// Returns a list of positions that were successfully modified.
+
 pub fn place(world: &mut World, hit: &RayHit, id: VoxelId, radius: u32) -> Vec<IVec3> {
     // Don't place on top of air (shouldn't happen from a real hit, but guard it).
     if id.is_air() {
@@ -150,7 +136,6 @@ mod tests {
     use super::*;
     use crate::world::{Chunk, VoxelId, World};
 
-    /// Builds a world with a flat stone floor at y=0 in the origin chunk.
     fn flat_world() -> World {
         let mut world = World::new();
         let mut chunk = Chunk::empty();
@@ -162,7 +147,6 @@ mod tests {
     #[test]
     fn ray_hits_floor_from_above() {
         let world = flat_world();
-        // Cast straight down from (0.5, 5.0, 0.5)
         let hit = raycast(&world, Vec3::new(0.5, 5.0, 0.5), Vec3::NEG_Y, 20.0);
         assert!(hit.is_some(), "expected a hit on the floor");
         let hit = hit.unwrap();
@@ -172,7 +156,6 @@ mod tests {
     #[test]
     fn ray_misses_when_pointing_away() {
         let world = flat_world();
-        // Cast upward — no ceiling, should miss
         let hit = raycast(&world, Vec3::new(0.5, 5.0, 0.5), Vec3::Y, 20.0);
         assert!(hit.is_none(), "upward ray should miss the floor");
     }
@@ -180,7 +163,6 @@ mod tests {
     #[test]
     fn ray_misses_beyond_max_distance() {
         let world = flat_world();
-        // Floor is at y=0, origin at y=5, max_distance=2 — can't reach
         let hit = raycast(&world, Vec3::new(0.5, 5.0, 0.5), Vec3::NEG_Y, 2.0);
         assert!(hit.is_none(), "ray should not reach floor within max_distance=2");
     }
@@ -190,7 +172,6 @@ mod tests {
         let world = flat_world();
         let hit = raycast(&world, Vec3::new(0.5, 5.0, 0.5), Vec3::NEG_Y, 20.0)
             .expect("should hit");
-        // The voxel in front of a floor hit (coming from above) should be y=1
         assert_eq!(hit.prev_pos.y, 1, "prev_pos should be y=1 above the floor");
     }
 
@@ -226,10 +207,8 @@ mod tests {
 
     #[test]
     fn ray_from_origin_inside_voxel_still_works() {
-        // Start inside a solid voxel — the DDA should detect it immediately.
         let world = flat_world();
         let hit = raycast(&world, Vec3::new(0.5, 0.5, 0.5), Vec3::Y, 20.0);
-        // The starting voxel (0,0,0) is stone, so it should be a hit at t≈0
         assert!(hit.is_some());
         assert_eq!(hit.unwrap().voxel_pos, IVec3::new(0, 0, 0));
     }

@@ -1,6 +1,4 @@
-/// Optimised renderer benchmark shim — see voxel-core/src/benchmark/runner.rs
-/// for the shared loop. This file only contains what is specific to the
-/// optimised renderer: vertex pool, indirect buffer, compute cull dispatch.
+/// Optimised renderer benchmark shim 
 use glam::IVec3;
 use voxel_core::{
     benchmark::{
@@ -197,11 +195,6 @@ impl BenchRenderer for OptimisedBenchRenderer {
             }
         }
         gpu.queue.submit(std::iter::once(encoder.finish()));
-        // The optimised renderer issues exactly 1 GPU draw call (multi_draw_indirect)
-        // regardless of how many chunks are in the scene. Record that single call
-        // with the total geometry so draw_calls=1 appears in the summary.
-        // record_draw(vertex_count, index_count) → triangles = index_count / 3
-        // total_quads × 6 vertices, total_quads × 6 index_equiv → total_quads × 2 triangles
         let q = s.total_quads;
         collector.record_draw(q * 6, q * 6);
     }

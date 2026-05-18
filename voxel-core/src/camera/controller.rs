@@ -1,14 +1,10 @@
 use glam::Vec3;
 use super::camera::Camera;
 
-/// Fly-cam movement speed and sensitivity constants.
 #[derive(Debug, Clone)]
 pub struct ControllerConfig {
-    /// Movement speed in world units per second.
     pub move_speed: f32,
-    /// Multiplier applied when the sprint key is held.
     pub sprint_multiplier: f32,
-    /// Mouse look sensitivity (radians per pixel).
     pub look_sensitivity: f32,
 }
 
@@ -22,13 +18,9 @@ impl Default for ControllerConfig {
     }
 }
 
-/// Yaw/pitch angles driving the camera look direction.
-/// Roll is intentionally omitted — fly-cams without roll are more comfortable.
 #[derive(Debug, Clone, Default)]
 pub struct CameraController {
-    /// Horizontal rotation in radians. Wraps at ±π.
     pub yaw: f32,
-    /// Vertical rotation in radians. Clamped to ±89° to prevent gimbal flip.
     pub pitch: f32,
     pub config: ControllerConfig,
 }
@@ -38,22 +30,18 @@ impl CameraController {
         CameraController { config, ..Default::default() }
     }
 
-    /// Applies a mouse delta (pixels) to yaw and pitch.
     pub fn apply_mouse_delta(&mut self, dx: f32, dy: f32) {
         self.yaw += dx * self.config.look_sensitivity;
         self.pitch -= dy * self.config.look_sensitivity;
 
-        // Wrap yaw to [-π, π] to prevent float drift over long sessions.
         use std::f32::consts::PI;
         if self.yaw > PI { self.yaw -= 2.0 * PI; }
         if self.yaw < -PI { self.yaw += 2.0 * PI; }
 
-        // Clamp pitch so the camera never flips upside-down.
         let max_pitch = 89.0_f32.to_radians();
         self.pitch = self.pitch.clamp(-max_pitch, max_pitch);
     }
 
-    /// Computes the forward unit vector from current yaw and pitch.
     pub fn forward(&self) -> Vec3 {
         Vec3::new(
             self.yaw.cos() * self.pitch.cos(),
@@ -62,20 +50,11 @@ impl CameraController {
         ).normalize()
     }
 
-    /// Updates the camera's forward vector from the current yaw/pitch.
     pub fn update_camera_look(&self, camera: &mut Camera) {
         camera.forward = self.forward();
     }
 
-    /// Moves the camera based on directional input for one frame.
-    ///
-    /// `axes` is a unit vector in camera-local space:
-    ///   +X = strafe right, -X = strafe left
-    ///   +Y = fly up,       -Y = fly down
-    ///   +Z = move back,    -Z = move forward
-    ///
-    /// `dt` is the frame delta in seconds.
-    /// `sprinting` applies the sprint multiplier.
+  
     pub fn apply_movement(
         &self,
         camera: &mut Camera,
@@ -169,9 +148,7 @@ mod tests {
         let ctrl = default_controller();
         let mut cam = Camera::new(1.0);
         cam.position = Vec3::ZERO;
-        // Move forward (axes.z = -1)
         ctrl.apply_movement(&mut cam, Vec3::new(0.0, 0.0, -1.0), 1.0, false);
-        // With yaw=0, pitch=0 forward=(1,0,0) so position moves in +X
         assert!(cam.position.x > 0.0, "camera should have moved forward");
     }
 
